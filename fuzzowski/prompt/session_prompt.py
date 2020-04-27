@@ -1,6 +1,9 @@
 import os
 import sys
 import signal
+import hexdump
+import array
+import subprocess
 from typing import TYPE_CHECKING
 from prompt_toolkit import HTML, print_formatted_text
 from prompt_toolkit.styles import Style, merge_styles
@@ -9,6 +12,8 @@ from fuzzowski import constants
 from fuzzowski import exception
 
 from .prompt import CommandPrompt
+from ..constants import INSTR_AFL_MAP_SIZE
+from .. import shm
 
 if TYPE_CHECKING:
     from fuzzowski.session import Session
@@ -89,7 +94,15 @@ class SessionPrompt(CommandPrompt):
                 'desc': 'Mark test case as crash. Saving the poc in the results folder',
                 'exec': self._cmd_addcrash
             },
-
+            'ishowmem': {
+                'desc': 'Take a snapshot of the AFL-instrumentation\'s shared memory. -> ishowmem [start] [offset]',
+                'exec': self._cmd_ishowmem
+            },
+            'idumpmem': {
+                'desc': 'Take a snapshot of the AFL-instrumentation\'s shared memory and dump it to file -> idumpmem'
+                        '<filepath>',
+                'exec': self._cmd_idumpmem
+            },
         })
         return commands
 
@@ -400,6 +413,58 @@ class SessionPrompt(CommandPrompt):
 
     # --------------------------------------------------------------- #
 
+    def _cmd_ishowmem(self, tokens):
+        """
+        Print a snapshot of the afl instrumentation's shared memory.
+
+        :param tokens: list of args -> memsnap [start] [offset]
+        :return: None
+        """
+        start = 0
+        stop = 0
+        try:
+            start = 0 if len(tokens) < 1 else int(int(tokens[0], 0) / 16)
+            stop = int(INSTR_AFL_MAP_SIZE / 16) if len(tokens) < 2 else int(int(tokens[1], 0) / 16 + start)
+        except ValueError:
+            pass
+        hdr = ('Base', *(x for x in range(0, 16)), 'ASCII')
+        try:
+            less = subprocess.Popen(["less"], stdin=subprocess.PIPE);
+            less.stdin.write(('{:10}' + ('{:02X} ' * 8 + ' ') * 2 + '{}').format(*hdr).encode(encoding='utf-8'))
+            less.stdin.write(b'\n' + b'-' * 76 + b'\n')
+            for i, line in enumerate(hexdump.hexdump(data=shm.get().buf, result='generator')):
+                if start <= i < stop:
+                    less.stdin.write(line.encode(encoding='utf-8'))
+                    less.stdin.write(b'\n')
+            less.stdin.close()
+            less.wait()
+        except BrokenPipeError:
+            pass
+
+    # --------------------------------------------------------------- #
+
+    def _cmd_idumpmem(self, tokens):
+        """
+        Dump a snapshot of the afl instrumentation's shared memory right into a binary file
+
+        :param tokens: list of args -> memdump <filepath>
+        :return: None
+        """
+        if len(tokens) < 1:
+            self._print_error("missing filepath parameter")
+            return
+        filepath = tokens[0]
+        try:
+            with open(filepath, 'wb') as fd:
+                clone = bytearray(array.array('b', shm.get().buf))
+                fd.write(clone)
+                fd.flush()
+                self._print_color('green', 'Dumped {} bytes shared memory into \'{}\''.format(len(clone), filepath))
+        except IOError as io:
+            self._print_error(io)
+
+    # --------------------------------------------------------------- #
+
     def get_style(self):
         return merge_styles([super().get_style(), Style.from_dict(constants.STYLE)])
 
@@ -414,3 +479,4 @@ class SessionPrompt(CommandPrompt):
         print_formatted_text(HTML('<b>Exiting prompt...</b>'))
 
     # --------------------------------------------------------------- #
+
