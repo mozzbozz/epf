@@ -1,4 +1,5 @@
 import atexit
+import array
 from multiprocessing import shared_memory
 
 from .constants import INSTR_AFL_MAP_SIZE
@@ -17,6 +18,17 @@ class AFLShm(shared_memory.SharedMemory):
         if identifier is None:
             identifier = 'fuzzowski_afl_{}_{}'.format(get_random_string(4), get_random_string(12))
         super().__init__(name=identifier, create=True, size=INSTR_AFL_MAP_SIZE)
+
+    def directed_branch_coverage(self) -> (int, int):
+        snap = array.array('B', self.buf)
+        dedup_cnt = 0
+        branch_cnt = 0
+        for b in snap:
+            if b <= 0:
+                continue
+            branch_cnt += b
+            dedup_cnt += 1
+        return dedup_cnt, branch_cnt
 
 
 __shm = None
