@@ -97,6 +97,6 @@ def _update_env(identifier: str) -> {}:
     :return: Updated copy of environment dict
     """
     environ = os.environ.copy()
-    environ[INSTR_AFL_ENV] = str(id)
+    environ[INSTR_AFL_ENV] = str(identifier)
     return environ
 
