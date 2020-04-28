@@ -1,23 +1,26 @@
 from .constants import INSTR_AFL_MAP_SIZE, INSTR_AFL_MIN_SHM_ID, INSTR_AFL_MAX_SHM_ID
 from multiprocessing import shared_memory
-import random
+from .helpers.helpers import get_random_string
 
 
 class AFLShm(shared_memory.SharedMemory):
     """
     AFLShm is a wrapper for multiprocessing.shared_memory.SharedMemory, which automatically initializes the
     underlying object in such a way that it is compatible to the AFL instrumentation.
+    IMPORTANT: Python's new shared_memory Module uses MMAP (shm_open, mmap, ...) , but afl-clang-fast uses the older
+    SystemV API (shmget, shmat, ...) by default. You need to compile AFL and afl-clang-fast with -DUSEMMAP in order for
+    this to work.
     """
-    def __init__(self, identifier: int = None):
+    def __init__(self, identifier: str = None):
         if identifier is None:
-            identifier = str(random.SystemRandom().randint(INSTR_AFL_MIN_SHM_ID, INSTR_AFL_MAX_SHM_ID))
+            identifier = 'fuzzowski_afl_{}_{}'.format(get_random_string(4), get_random_string(12))
         super().__init__(name=identifier, create=True, size=INSTR_AFL_MAP_SIZE)
 
 
 __shm = None
 
 
-def get(identifier: int = None) -> AFLShm:
+def get(identifier: str = None) -> AFLShm:
     """
     Allocate "singleton" linux SHM region which will be passed to instrumented binary.
     Identifier is randomly drawn from /dev/urandom within (MIN_UINT32_T, MAX_UINT32_T) if is None.
@@ -44,7 +47,7 @@ def reset():
     return
 
 
-def recreate(identifier: int = None):
+def recreate(identifier: int = None) -> AFLShm:
     """
     Recreate shared memory
 
