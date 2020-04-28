@@ -1,4 +1,4 @@
-from .constants import INSTR_AFL_MAP_SIZE, INSTR_AFL_MIN_SHM_ID, INSTR_AFL_MAX_SHM_ID
+from .constants import INSTR_AFL_MAP_SIZE
 from multiprocessing import shared_memory
 from .helpers.helpers import get_random_string
 
