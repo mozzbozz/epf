@@ -103,6 +103,11 @@ class SessionPrompt(CommandPrompt):
                         '<filepath>',
                 'exec': self._cmd_idumpmem
             },
+            'ibranch-report': {
+                'desc': 'Report the amount of observed, both deduplicated and total amount of directed branches '
+                        'provided by the AFL-instrumentation.',
+                'exec': self._cmd_ibranch_report
+            }
         })
         return commands
 
@@ -462,6 +467,21 @@ class SessionPrompt(CommandPrompt):
                 self._print_color('green', 'Dumped {} bytes shared memory into \'{}\''.format(len(clone), filepath))
         except IOError as io:
             self._print_error(io)
+
+    # --------------------------------------------------------------- #
+
+    def _cmd_ibranch_report(self, tokens):
+        """
+        Calculate a branch report based on the AFL instrumentation.
+
+        :param tokens: ignored
+        :return: None
+        """
+        uniq, total = shm.get().directed_branch_coverage()
+        report = '<b>AFL-instrumentation directed branch report based on observed block ' \
+                 'transitions:</b>\n<style fg="ansired">total:  <b>{}</b></style>\n' \
+                 '<style fg="ansiyellow">unique: <b>{}</b></style>'.format(total, uniq)
+        print_formatted_text(HTML(report), style=self.get_style())
 
     # --------------------------------------------------------------- #
 
