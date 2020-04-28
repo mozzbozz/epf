@@ -31,7 +31,7 @@ def get(identifier: str = None) -> AFLShm:
     global __shm
     if __shm is None:
         __shm = AFLShm(identifier=identifier)
-    reset()  # not sure if the SharedMemory Object properly initializes the new memory region.
+        reset()
     return __shm
 
 
