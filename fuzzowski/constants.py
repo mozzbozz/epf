@@ -53,6 +53,3 @@ INSTR_AFL_ENV = "__AFL_SHM_ID"
 # the instrumentation, with falsifies insights
 INSTR_AFL_MAP_SIZE_POW2 = 16
 INSTR_AFL_MAP_SIZE = 1 << INSTR_AFL_MAP_SIZE_POW2
-# int32_t limits. The AFL-instrumented binary expects a str(int32_t) as SHM identifier.
-INSTR_AFL_MAX_SHM_ID = 0x7FFFFFFF
-INSTR_AFL_MIN_SHM_ID = -0x80000000
