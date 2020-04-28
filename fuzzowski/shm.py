@@ -1,5 +1,7 @@
-from .constants import INSTR_AFL_MAP_SIZE
+import atexit
 from multiprocessing import shared_memory
+
+from .constants import INSTR_AFL_MAP_SIZE
 from .helpers.helpers import get_random_string
 
 
@@ -62,6 +64,7 @@ def recreate(identifier: int = None) -> AFLShm:
     return get(identifier=identifier if identifier is not None else tmp)
 
 
+@atexit.register  # clear shm at exit so it won't leak
 def delete():
     """
     Delete Shared Memory
