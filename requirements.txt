@@ -1,5 +1,7 @@
 prompt-toolkit>=3.0.0,<4.0.0
-attrs
-pygments
+attrs~=19.3.0
+pygments~=2.6.1
 pydot
-hexdump
+hexdump~=3.3
+six~=1.14.0
+pyserial~=3.4

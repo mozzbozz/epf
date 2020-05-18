@@ -39,17 +39,17 @@ class ITargetConnection(object):
         """
         raise NotImplementedError
 
-    @abc.abstractmethod
-    def recv_all(self, max_bytes):
-        """
-        Receive up to max_bytes data, trying to receive everything coming.
+    # @abc.abstractmethod
+    # def recv_all(self, max_bytes):
+    #     """
+    #     Receive up to max_bytes data, trying to receive everything coming.
 
-        :param max_bytes: Maximum number of bytes to receive.
-        :type max_bytes: int
+    #     :param max_bytes: Maximum number of bytes to receive.
+    #     :type max_bytes: int
 
-        :return: Received data. bytes('') if no data is received.
-        """
-        raise NotImplementedError
+    #     :return: Received data. bytes('') if no data is received.
+    #     """
+    #     raise NotImplementedError
 
     @abc.abstractmethod
     def send(self, data):
