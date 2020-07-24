@@ -10,6 +10,8 @@ import socket
 import struct
 import time
 import zlib
+import random
+import string
 
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit import HTML
@@ -463,3 +465,7 @@ def get_all_subclasses(cls):
         all_subclasses.extend(get_all_subclasses(subclass))
 
     return all_subclasses
+
+
+def get_random_string(length: int, chars: [] = string.ascii_uppercase + string.ascii_lowercase) -> str:
+    return ''.join(random.SystemRandom().choice(chars) for _ in range(0, length))

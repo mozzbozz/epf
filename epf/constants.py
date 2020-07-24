@@ -43,3 +43,13 @@ STYLE = {
     'warning': 'bold orange',
 
     }
+
+# ------ AFL Instrumentation ------
+# AFL instrumentation environment variable (set in #define within AFL)
+INSTR_AFL_ENV = "__AFL_SHM_ID"
+# Size of SHM to be allocated. Is defined by MAP_SIZE and MAP_SIZE_POW2 in AFL, so we do it as well.
+# Whole SHM should, in a best case scenario, fully fit into higher layer CPU caches. Thus, it defaults to
+# 1 << 16 = 64 Kibibytes! Be aware: smaller map sizes increases the likelihood of collisions within
+# the instrumentation, with falsifies insights
+INSTR_AFL_MAP_SIZE_POW2 = 16
+INSTR_AFL_MAP_SIZE = 1 << INSTR_AFL_MAP_SIZE_POW2
