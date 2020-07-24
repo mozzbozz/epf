@@ -1,6 +1,7 @@
 import abc
 from ..ip_constants import DEFAULT_MAX_RECV
 
+
 class ITargetConnection(object):
     """
     Interface for connections to fuzzing targets.
@@ -63,7 +64,8 @@ class ITargetConnection(object):
         """
         raise NotImplementedError
 
-    @abc.abstractproperty
+    @property
+    @abc.abstractmethod
     def info(self):
         """Return description of connection info.
 

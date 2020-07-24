@@ -31,7 +31,7 @@ class IEC104(IFuzzer):
 
     @staticmethod
     def initialize(*args, **kwargs) -> None:
-        IEC104.pcap_file = kwargs['pcap_filename']
+        IEC104.pcap_file = kwargs['pcap']
         IEC104.populations = Population.generate(
             pcap_filename=IEC104.pcap_file,
             layer_filter=IEC104.layer_filter,

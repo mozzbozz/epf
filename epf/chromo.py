@@ -67,7 +67,6 @@ class Individual(object):
     def random_mutation(self):
         keys = sorted(set(self._chromosomes))
         mutation_field = random.choice(keys)
-        print(self._chromosomes[mutation_field].current_value)
         self._chromosomes[mutation_field].random_mutate()
 
     def give_birth(self, other_parent: "Individual", genetics: Dict[str, Chromosome]) -> "Individual":

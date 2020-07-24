@@ -130,12 +130,12 @@ class SocketConnection(ITargetConnection):
             raise exception.EPFRuntimeError("INVALID PROTOCOL SPECIFIED: %s" % self.proto)
 
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, _seconds_to_second_microsecond_struct(self._send_timeout))
-        #self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, _seconds_to_second_microsecond_struct(self._recv_timeout))
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, _seconds_to_second_microsecond_struct(self._recv_timeout))
 
         # Connect is needed only for TCP protocols
         if self.proto == "tcp" or self.proto == "ssl":
             try:
-                #self._sock.settimeout(self._recv_timeout)
+                self._sock.settimeout(self._recv_timeout)
                 self._sock.connect((self.host, self.port))
             except (socket.timeout, TimeoutError) as e:
                 raise exception.EPFTargetConnectionFailedError('ETIMEDOUT')
@@ -155,7 +155,6 @@ class SocketConnection(ITargetConnection):
             ssl_sock = ssl.wrap_socket(self._sock)
             # TODO: Python3 change, maybe should use a context instead of deprecated ssl.wrap_socket?
             self._sock = ssl_sock
-            # self._sock = httplib.FakeSocket(self._sock, ssl_sock)
 
     def recv(self, max_bytes: int = DEFAULT_MAX_RECV):
         """

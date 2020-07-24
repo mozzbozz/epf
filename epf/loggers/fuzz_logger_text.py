@@ -7,7 +7,6 @@ from . import ifuzz_logger_backend
 from ..constants import STYLE
 
 
-# DEFAULT_HEX_TO_STR = helpers.hex_to_hexstr
 DEFAULT_HEX_TO_STR = helpers.repr_input_bytes
 
 

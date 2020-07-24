@@ -29,25 +29,21 @@ class SessionPrompt(CommandPrompt):
         """ Contains the full list of commands"""
         commands = super().get_commands()
         commands.update({
-            'env': {
+            'info': {
                 'desc': 'Show Session Information',
-                'exec': self._cmd_env
+                'exec': self._cmd_info,
             },
-            'goto': {
-                'desc': 'Go to test case by index',
-                'exec': self._cmd_goto
-            },
-            'next': {
-                'desc': 'Run next test case',
-                'exec': self._cmd_run_next
-            },
-            'print': {
-                'desc': 'Print a test case by index',
-                'exec': self._cmd_print_test_case
-            },
+            # 'print': {
+            #     'desc': 'Print a test case by index',
+            #     'exec': self._cmd_print_test_case
+            # },
             'poc': {
                 'desc': 'Print the python poc code of test case by index',
                 'exec': self._cmd_print_poc_test_case
+            },
+            'performance': {
+                'desc': 'Performance',
+                'exec': self._cmd_performance,
             },
             'suspects': {
                 'desc': 'print information about the tests suspected of crashing something',
@@ -57,37 +53,9 @@ class SessionPrompt(CommandPrompt):
                 'desc': 'delete suspect',
                 'exec': self._cmd_delsuspect
             },
-            'disabled-elements': {
-                'desc': 'List the disabled elements',
-                'exec': self._cmd_list_disabled_elements
-            },
-            'disable': {
-                'desc': 'Disable a fuzzing element',
-                'exec': self._cmd_disable
-            },
-            'enable': {
-                'desc': 'Enable a disabled element',
-                'exec': self._cmd_enable
-            },
-            'fuzz': {
-                'desc': 'Fuzz a test case by index',
-                'exec': self._cmd_fuzz_single_case
-            },
             'restart': {
                 'desc': 'Launch the restarter module to restart the target',
                 'exec': self._cmd_restart
-            },
-            'skip': {
-                'desc': 'Skip the actual mutant',
-                'exec': self._cmd_skip
-            },
-            'test': {
-                'desc': 'Send the actual case without fuzzing',
-                'exec': self._cmd_test_single_case
-            },
-            'crash': {
-                'desc': 'Mark test case as crash. Saving the poc in the results folder',
-                'exec': self._cmd_addcrash
             },
             'graph': {
                 'desc': 'graph',
@@ -110,19 +78,14 @@ class SessionPrompt(CommandPrompt):
     # --------------------------------------------------------------- #
 
     def bottom_toolbar(self):
-        # if self.session.test_case is not None:
-        #     toolbar_message = HTML(f'Test Case [<bttestn>{self.session.mutant_index}</bttestn>] '
-        #                            f'of [<bttestn>{self.session.total_mutations}</bttestn>]'
-        #                            f': Fuzzing Path <bttestn>{self.session.test_case.path_name}</bttestn> '
-        #                            f' Mutant <bttestn>{self.session.test_case.short_name}</bttestn>')
-        # else:
-        #     toolbar_message = HTML(f'Test Case [<bttestn>{self.session.mutant_index}</bttestn>] '
-        #                            f'of [<bttestn>{self.session.total_mutations}</bttestn>]')
-
-        toolbar_message = HTML(f'| Proto: [<bttestn>{self.session.fuzz_protocol.name}</bttestn>] '
-                               f'| PSeed: [<bttestn>{self.session.fuzz_protocol.pcap_file}</bttestn>] '
-                               f'| RSeed: [<bttestn>{self.session.opts.prng_seed}</bttestn>]')
-
+        elapsed = round(self.session.time_budget.execution_time, 2)
+        budget = round(self.session.time_budget.budget, 2)
+        toolbar_message = HTML(f'<bttestn>{self.session.fuzz_protocol.name}</bttestn> <b>&gt;</b> '
+                               f'Iterations: <bttestn>{self.session.test_case_cnt}</bttestn>'
+                               f'| ExecTime (s): <bttestn>{elapsed}</bttestn>/<bttestn>{budget}</bttestn> '
+                               f'| PSeed: <bttestn>{self.session.fuzz_protocol.pcap_file}</bttestn> '
+                               f'| PRNG: <bttestn>{self.session.opts.seed}</bttestn> '
+                               f'| Active Pop.: <bttestn>{self.session.active_population.species}</bttestn> ')
         return toolbar_message
 
     # --------------------------------------------------------------- #
@@ -149,7 +112,6 @@ class SessionPrompt(CommandPrompt):
         try:
             print_formatted_text(HTML(' <testn>SIGINT received. Pausing fuzzing after this test case...</testn>'),
                                  style=self.get_style())
-            #self.logger.log_info("SIGINT received. Pausing fuzzing after this test case...")
         except RuntimeError:
             # prints are not safe in signal handlers.
             # This happens if the signal is catch while printing
@@ -170,97 +132,31 @@ class SessionPrompt(CommandPrompt):
     # Command handlers                                                #
     # ================================================================#
 
-    def _cmd_disable(self, tokens):
-        try:
-
-            self.session.disable_by_path_name(tokens[0])
-        except IndexError:
-            self._print_error('disable usage: disable REQUEST_NAME.MUTANT_NAME')
-            return
-        except exception.EPFRuntimeError as e:
-            self._print_error(e)
-
-    # --------------------------------------------------------------- #
-
-    def _cmd_enable(self, tokens):
-        try:
-
-            self.session.disable_by_path_name(tokens[0], disable=False)
-        except IndexError:
-            self._print_error('Usage: enable REQUEST_NAME.MUTANT_NAME')
-            return
-        except exception.EPFRuntimeError as e:
-            self._print_error(e)
-
-    def _cmd_env(self, _):
+    def _cmd_info(self, _):
         self._print_color('gold', 'Session Options:')
         for k, v in self.session.opts.__dict__.items():
             print(f'  {str(k)} = {str(v)}')
 
-        self._print_color('gold', '\nSuspects:')
-        self._cmd_suspects([])
+        self._print_color('gold', '\nPopulations:')
+        for k, v in self.session.populations.items():
+            fstr = f'  Population = \'{k}\', Individuals = {len(v)}'
+            if v == self.session.active_population:
+                self._print_color("green", fstr)
+            else:
+                print(fstr)
 
-        self._print_color('gold', '\nDisabled Elements:')
-        self._cmd_list_disabled_elements([])
+    def _cmd_performance(self, _):
+        self._print_color('gold', 'Session Options:')
+        for k, v in self.session.opts.__dict__.items():
+            print(f'  {str(k)} = {str(v)}')
 
-        self._print_color('gold', '\nPaths:')
-        actual_request = None
-        if self.session.test_case is not None:
-            actual_request = self.session.test_case.request
-        raise Exception("TODO")
-        # for path in self.session.graph.path_iterator():
-        #     print(f"[{' -> '.join([edge.dst.name for edge in path])}]")
-        #     for edge in path:
-        #         mutants_list = edge.dst.list_fuzzable_mutants()
-        #         print(f'  {edge.dst.__class__.__name__}: {edge.dst.name}\t {"[DISABLED]" if edge.dst.disabled else ""}')
-        #         for mutant in mutants_list:
-        #             print(f'    {mutant.__class__.__name__}: {edge.dst.name}.{mutant.name}\t (Def Val: {mutant.original_value}) {"[DISABLED]" if mutant.disabled else ""}')
-        #     print('')
-
-    def _cmd_list_disabled_elements(self, tokens):
-        pass
-        # for path_name, elem in self.session.disabled_elements.items():
-        #     print(f'{path_name} ({type(elem).__name__})')
-
-    # --------------------------------------------------------------- #
-
-    def _cmd_goto(self, tokens):
-        """
-        Move to test case number
-
-        :param tokens: list of args, should have only an integer
-        :return: None
-        """
-        try:
-            try:
-                mutant_index = int(tokens[0])
-                self.session.goto(mutant_index)
-            except IndexError:
-                self._print_error(f'<red>goto usage: goto [TEST_ID|PATH]. Example:\n'
-                                  f'\tgoto 10\n'
-                                  f'\tgoto request1.mutant1</red>')
-                return
-            except ValueError:
-                self.session.goto(tokens[0])
-        except exception.EPFRuntimeError as e:
-            self._print_error(str(e))
-
-    # --------------------------------------------------------------- #
-
-    def _cmd_run_next(self, tokens):
-        """
-        Run the actual test case and move to next one
-
-        :param tokens: Not used
-        :return: None
-        """
-        if self.session.mutant_index == 0 and self.session.test_case is None:
-            # In the mutant index 0, the first next will just go to 1 without doing nothing
-            self.session.run_next(force=True)
-
-        self.session.run_next(force=True)
-
-    # --------------------------------------------------------------- #
+        self._print_color('gold', '\nPopulations:')
+        for k, v in self.session.populations.items():
+            fstr = f'  Population = \'{k}\', Individuals = {len(v)}'
+            if v == self.session.active_population:
+                self._print_color("green", fstr)
+            else:
+                print(fstr)
 
     def _cmd_print_test_case(self, tokens):
         try:
@@ -294,10 +190,6 @@ class SessionPrompt(CommandPrompt):
             self.session.test_case.print_poc()
         self.session.load_session_state(session_state)
 
-    # --------------------------------------------------------------- #
-
-    def _cmd_skip(self, _):
-        self.session.skip()
     # --------------------------------------------------------------- #
 
     def _cmd_suspects(self, tokens):
@@ -334,78 +226,11 @@ class SessionPrompt(CommandPrompt):
 
     # --------------------------------------------------------------- #
 
-    def _cmd_fuzz_single_case(self, tokens):
-        """
-        Save actual state, fuzz single case (number) and restore state
-
-        :param tokens: list of args, should have only an integer
-        :return: None
-        """
-        try:
-            test_case_index = int(tokens[0])
-            session_state = self.session.save_session_state()
-            self.session.goto(test_case_index)
-            self.session.run()
-            self.session.load_session_state(session_state)
-        except IndexError:  # No index specified, Fuzz current case
-            self.session.run()
-        except ValueError:
-            self._print_error('Usage: fuzz [TEST_ID]')
-            return
-
-    # --------------------------------------------------------------- #
-
     def _cmd_restart(self, _):
         """
         Launch the restarter module of the session, if a restarter module was set
         """
         self.session.restart_target()
-
-    # --------------------------------------------------------------- #
-
-    def _cmd_test_single_case(self, tokens):
-        """
-        Save actual state, fuzz single case (number) and restore state
-
-        :param tokens: list of args, should have only an integer
-        :return: None
-        """
-        try:
-            test_case_index = int(tokens[0])
-            self.session.test(test_case_index)
-        except IndexError:  # No index specified, Fuzz current case
-            self.session.test()
-        except ValueError:
-            self._print_error('Usage: test [TEST_ID]')
-            return
-
-    # --------------------------------------------------------------- #
-
-    def _cmd_addcrash(self, tokens):
-        try:
-            test_case_index = int(tokens[0])
-        except IndexError:  # No index specified, Show crashes?
-            self._print_error('Usage: crash [TEST_ID]')
-            return
-        except ValueError:
-            self._print_error('Usage: crash [TEST_ID]')
-            return
-        session_state = self.session.save_session_state()
-        self.session.goto(test_case_index)
-        if self.session.test_case is not None:
-            poc_code = self.session.test_case.get_poc()
-            # TODO: host,port,proto may be not available, call public functions
-            host = self.session.target._target_connection.host
-            port = self.session.target._target_connection.port
-            proto = self.session.target._target_connection.proto
-            name = self.session.test_case.short_name
-            poc_filename = os.path.join(constants.RESULTS_DIR,
-                                        f'poc_{host}_{port}_{proto}_{test_case_index}_{name}.py')
-            print_formatted_text(HTML(f'Writing PoC to file: <testn>{poc_filename}</testn>'),
-                                 style=self.get_style())
-            with open(poc_filename, 'w') as f:
-                f.write(poc_code)
-        self.session.load_session_state(session_state)
 
     # --------------------------------------------------------------- #
 

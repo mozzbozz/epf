@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 class TestCase(object):
 
-    def __init__(self, id: int, session: 'Session', individual: Individual, path: List[Any]):
+    def __init__(self, id: int, session: 'Session', individual: Individual):
         """
         The TestCase contains all the information to perform a test or show information about it.
 
@@ -19,24 +19,15 @@ class TestCase(object):
             id: a number (should be the mutation number of the session)
             session: The session file, as most options from the session are used
             individual: The request that is being fuzzed
-            path: The path of requests that is being fuzzed
         """
         self.id = id
         self.session = session
         self.individual = individual
-        self.path = path
 
         self.logger = session.logger
 
-        # self.path_name = '->' \
-        #     .join([edge.dst.name if edge.dst != self.request else f'[{edge.dst.name}]' for edge in self.path])
-        self.name = "johannes"
-        # f'{self.path_name}.{self.request.mutant.name}.{self.request.mutant_index}'
-        self.short_name = "jojo"  # f'{self.request.name}.{self.request.mutant.name}.{self.request.mutant_index}'
+        self.name = f"{self.id}.{self.individual.species.replace(' ', '_')}.{str(self.individual.identity)[-12:]}"
         self.errors = []
-
-        # self.request_name = self.request.name
-        # self.mutant_name = self.request.mutant.name
 
     def add_error(self, error):
         """ Add an error to the current case """
@@ -59,18 +50,15 @@ class TestCase(object):
         # TODO: Mechanism for not opening if want to keep an open connection between fuzzed packets
         #  (e.g. CLI in Telnet Session)
         try:
-            self.logger.open_test_case(f"{self.id}: {self.name}",
-                                       name=self.name, index=self.id)
-            self.logger.log_info(
-                f"Species: {self.individual.species} "
-                f"Identity: {self.individual.identity}")
+            self.logger.open_test_case(f"{self.name}",
+                                      name=self.name, index=self.id)
 
-            self.open_fuzzing_target(retry=retry)
+            self.open_fuzzing_target()
 
             fuzzed_sent = False
             # TODO: TESTCASE INTEGRATION
             # traverse_to_node()
-            #for idx, edge in enumerate(self.path, start=1):  # Now we go through our path, sending each request
+            # for idx, edge in enumerate(self.path, start=1):  # Now we go through our path, sending each request
             #    request = edge.dst
             #    callback = edge.callback
 
@@ -111,42 +99,31 @@ class TestCase(object):
             self.session.add_latest_test(self)
             return True
 
-    def test(self):
-        """Run a test case without fuzzing"""
-        pass
-        # self.run(fuzz=False, retry=False)
-
-    def open_fuzzing_target(self, retry: bool = True):
+    def open_fuzzing_target(self):
         """
         Try to open the target, twice in case one fails, saving last case as suspect if something goes wrong,
         restarting the target if a restarter is defined, and waiting for the target to wake up after that.
 
-        Args:
-            retry: Only retry, restart and wait for recover if retry is True
         """
         target = self.session.target
 
         try:
             target.open()
         except (exception.EPFTargetConnectionFailedError, Exception) as e:  # TimeoutError, socket.timeout
-            if retry:  # Only retry, restart and wait for recover if retry is True
-                try:
-                    self.logger.log_fail("Cannot connect to target; Retrying... ")
-                    target.open()  # Second try, just in case we have a network error not caused by the fuzzer
-                except (exception.EPFTargetConnectionFailedError, Exception) as e:
-                    self.logger.log_error("Cannot connect to target; target presumed down.")
-                    self.session.add_last_case_as_suspect(e)
-                    # raise
-                    self.session.restart_target()  # Restart the target if a restarter was set
-                    recovered = self.wait_until_target_recovered()  # Wait for target to recover
-                    if recovered:
-                        # target.open()  # Open a new connection, as the last one will be closed
-                        self.open_fuzzing_target()
-                    else:
-                        raise
-
-            else:  # Do not retry, raise the exception
-                raise
+            try:
+                self.logger.log_fail("Cannot connect to target; Retrying... ")
+                target.open()  # Second try, just in case we have a network error not caused by the fuzzer
+            except (exception.EPFTargetConnectionFailedError, Exception) as e:
+                self.logger.log_error("Cannot connect to target; target presumed down.")
+                self.session.add_last_case_as_suspect(e)
+                # raise
+                self.session.restart_target()  # Restart the target if a restarter was set
+                recovered = self.wait_until_target_recovered()  # Wait for target to recover
+                if recovered:
+                    # target.open()  # Open a new connection, as the last one will be closed
+                    self.open_fuzzing_target()
+                else:
+                    raise
 
     def transmit(self, individual: Individual, callback_data: bytes = None, original: bool = False, receive=True):
         """
@@ -187,6 +164,7 @@ class TestCase(object):
             condition = self.session.opts.ignore_transmission_errors if original \
                 else self.session.opts.ignore_connection_issues_after_fuzz
             if condition:
+                pass
                 self.logger.log_info(msg)
             else:
                 self.logger.log_fail(msg)
@@ -222,29 +200,23 @@ class TestCase(object):
                 else:  # Data received, no Responses defined
                     receive_failed = False
 
-                if self.session.opts.check_data_received_each_request:
-                    self.logger.log_check("Checking data received...")
-                    if receive_failed:
-                        # Assume a crash?
-                        self.logger.log_fail(f"Nothing received from target. {error}")
-                        self.session.add_suspect(self)
-                        raise exception.EPFTestCaseAborted("Receive failed. Aborting Test Case")
+                self.logger.log_check("Checking data received...")
+                if receive_failed:
+                    # Assume a crash?
+                    self.logger.log_fail(f"Nothing received from target. {error}")
+                    self.session.add_suspect(self)
+                    raise exception.EPFTestCaseAborted("Receive failed. Aborting Test Case")
 
             except exception.EPFTargetConnectionReset as e:  # Connection reset
-                self.logger.log_info("Target connection reset.")
-                if self.session.opts.check_data_received_each_request:
-                    self.logger.log_fail("Target connection reset.")
-                    self.add_error(e)
-                    self.session.add_suspect(self)
+                self.logger.log_fail("Target connection reset.")
+                self.add_error(e)
+                self.session.add_suspect(self)
                 raise exception.EPFTestCaseAborted(str(e))
             except exception.EPFTargetConnectionAborted as e:
                 msg = f"Target connection lost (socket error: {e.socket_errno} {e.socket_errmsg})"
-                if self.session.opts.check_data_received_each_request:
-                    self.logger.log_fail(msg)
-                    self.add_error(e)
-                    self.session.add_suspect(self)
-                else:
-                    self.logger.log_info(msg)
+                self.logger.log_fail(msg)
+                self.add_error(e)
+                self.session.add_suspect(self)
                 raise exception.EPFTestCaseAborted(str(e))
 
     # --------------------------------------------------------------- #
@@ -264,12 +236,14 @@ class TestCase(object):
             self.logger.log_info(f"Target seems down. Sleeping for {self.session.opts.restart_sleep_time} seconds")
             time.sleep(self.session.opts.restart_sleep_time)
             try:
-                self.test()
+                self.session.target.open()
                 self.logger.log_info("Target recovered! Continuing fuzzing")
                 recovered = True
             except exception.EPFTargetConnectionFailedError:
+                pass
                 self.logger.log_info("Target still down")
             except Exception as e:
+                pass
                 self.logger.log_info("Target still down")
                 self.logger.log_info("Exception {}: {}".format(type(e).__name__, str(e)))
         return recovered

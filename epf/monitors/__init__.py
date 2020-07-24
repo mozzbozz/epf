@@ -3,11 +3,14 @@ import pkgutil
 from .imonitor import IMonitor
 from .ithreadmonitor import IThreadMonitor
 
+
 def import_submodules(package, recursive=True):
     """ Import all submodules of a module, recursively, including subpackages
 
     :param package: package (name or actual module)
     :type package: str | module
+    :param recursive: recursive import all submodules
+    :type recursive: bool
     :rtype: dict[str, types.ModuleType]
     """
     if isinstance(package, str):
