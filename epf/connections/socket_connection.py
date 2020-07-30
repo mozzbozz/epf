@@ -88,6 +88,9 @@ class SocketConnection(ITargetConnection):
         self.ethernet_proto = ethernet_proto
         self.l2_dst = l2_dst
         self._udp_broadcast = udp_broadcast
+        self.recv_timeout_count = 0
+        self.send_timeout_count = 0
+        self.conn_errors = 0
 
         self._sock = None
 
@@ -138,8 +141,10 @@ class SocketConnection(ITargetConnection):
                 self._sock.settimeout(self._recv_timeout)
                 self._sock.connect((self.host, self.port))
             except (socket.timeout, TimeoutError) as e:
+                self.send_timeout_count += 1
                 raise exception.EPFTargetConnectionFailedError('ETIMEDOUT')
             except OSError as e:  # socket.error
+                self.conn_errors += 1
                 if e.errno == errno.ECONNREFUSED:
                     # raise exception.EPFTargetConnectionFailedError(e.message)
                     raise exception.EPFTargetConnectionFailedError('ECONNREFUSED')
@@ -184,9 +189,11 @@ class SocketConnection(ITargetConnection):
             else:
                 raise exception.EPFRuntimeError("INVALID PROTOCOL SPECIFIED: %s" % self.proto)
         except socket.timeout:
+            self.recv_timeout_count += 1
             data = b''
             # raise exception.EPFTargetRecvTimeout()
         except socket.error as e:
+            self.conn_errors += 1
             if e.errno == errno.ECONNABORTED:
                 raise exception.EPFTargetConnectionAborted(socket_errno=e.errno, socket_errmsg=e.strerror)
             elif (e.errno == errno.ECONNRESET) or \
@@ -244,7 +251,11 @@ class SocketConnection(ITargetConnection):
                 num_sent = self._sock.sendto(data, (self.host, self.ethernet_proto, 0, 0, self.l2_dst))
             else:
                 raise exception.EPFRuntimeError("INVALID PROTOCOL SPECIFIED: %s" % self.proto)
+        except (socket.timeout, TimeoutError) as e:
+            self.send_timeout_count += 1
+            raise exception.EPFTargetRecvTimeout()
         except socket.error as e:
+            self.conn_errors += 1
             if e.errno == errno.ECONNABORTED:
                 raise(exception.EPFTargetConnectionAborted(socket_errno=e.errno, socket_errmsg=e.strerror),
                        None, sys.exc_info()[2])
@@ -258,6 +269,7 @@ class SocketConnection(ITargetConnection):
                 raise
         # TODO: OSError:
         except (Exception, OSError) as e:
+            self.conn_errors += 1
             raise(exception.EPFTargetConnectionAborted(socket_errno=e.errno, socket_errmsg=e.strerror),
                    None, sys.exc_info()[2])
         return num_sent

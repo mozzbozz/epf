@@ -8,7 +8,8 @@ Licensed under GNU General Public License v2.0 - See LICENSE.txt
 """
 
 import argparse
-import random
+from numpy import random
+import random as stdrandom
 
 from epf import Target, SocketConnection
 from epf.fuzzers import IFuzzer
@@ -51,7 +52,10 @@ class EPF(object):
             monitors=self.monitors,
             fuzz_protocol=self.args.fuzz_protocol,
             seed=self.args.seed,
-            time_budget=self.args.time_budget
+            time_budget=self.args.time_budget,
+            alpha=self.args.alpha,
+            beta=self.args.beta,
+            population_limit=self.args.plimit,
         )
 
     # --------------------------------------------------------------- #
@@ -83,6 +87,9 @@ class EPF(object):
                               choices=fuzzers)
         fuzz_grp.add_argument('--pcap', dest='pcap', type=str, required=True, help='pcap population seed')
         fuzz_grp.add_argument('--seed', dest='seed', type=int, default=0, help='prng seed')
+        fuzz_grp.add_argument('--alpha', dest='alpha', type=float, default=0.995, help='simulated annealing cooldown parameter')
+        fuzz_grp.add_argument('--beta', dest='beta', type=float, default=0.950, help='simulated annealing reheat parameter')
+        fuzz_grp.add_argument('--plimit', dest='plimit', type=int, default=10000, help='population limit')
         fuzz_grp.add_argument('--budget', dest='time_budget', type=float, default=0.0, help='time budget')
 
         restarters_grp = self.parser.add_argument_group('Restart options')
@@ -116,6 +123,7 @@ class EPF(object):
         args.fuzz_protocol = [icl for icl in IFuzzer.__subclasses__() if icl.name == args.fuzz_protocol][0]
         args.fuzz_protocol.initialize(**args.__dict__)
         random.seed(args.seed)
+        stdrandom.seed(args.seed)
 
         self.restart_module = None
         if len(args.restart) > 0:

@@ -4,7 +4,8 @@ from scapy.fields import Field, PacketListField
 from scapy.all import rdpcap
 from scapy.packet import Packet
 import uuid
-import random
+from numpy import random, uint64, iinfo
+import random as stdrandom
 from uuid import UUID
 
 
@@ -50,9 +51,10 @@ class Individual(object):
     def __init__(self, packet: Packet, parents: Union[Tuple[UUID, UUID], Tuple[None, None]] = (None, None)):
         self._pkt = packet
         self._chromosomes = self._build_chromosomes()
-        self._identifier = uuid.UUID(int=random.getrandbits(128))
+        self._identifier = uuid.UUID(int=stdrandom.getrandbits(128))
         self._parents = parents
-        self._fitness = 0  # TODO: FITNESS
+        self.testcase = None
+        self.index = -1
 
     def _mix_genes_on_birth(self, genetics: Dict[str, Chromosome]):
         for name, chromo in genetics.items():
@@ -91,11 +93,6 @@ class Individual(object):
     def chromosomes(self) -> Dict[str, Chromosome]:
         return self._chromosomes
 
-    @property
-    def fitness(self) -> int:
-        # TODO: FITNESS
-        return sum(self.serialize())
-
     def serialize(self) -> bytes:
         return bytes(self._pkt)
 
@@ -132,6 +129,44 @@ class Population(object):
         self._crossover = crossover_fn
         self._pop_by_id = {}
         self._pop = []
+        self.crossovers = 0
+        self.spot_mutations = 0
+
+    def update(self, child: Individual, heat: float = 1.0, add: bool = False):
+        # TODO: CRASHED
+        identical = any(o.identical(child) for o in self._pop)
+        if identical:
+            return
+        parents = [self._pop_by_id[pid] for pid in child.parents]
+        if child.testcase.coverage_increase:
+            # interesting child, prioritize it
+            for i, p in enumerate(parents):
+                # increase probability of parents to be chosen by moving them up in the order
+                new_idx = min(0, p.index - 1)
+                if i == 0 and p.index < parents[i + 1].index and new_idx >= parents[i+1].index:
+                    parents[i + 1].index -= 1
+                self._pop.pop(p.index)
+                self._pop.insert(new_idx, p)
+            self._pop.insert(0, child)
+            self._pop_by_id[child.identity] = child
+            return
+        for i, p in enumerate(parents):
+            # increase probability of parents to be chosen by moving them up in the order
+            new_idx = p.index + 1
+            if i == 0 and p.index < parents[i + 1].index and new_idx >= parents[i + 1].index:
+                parents[i + 1].index -= 1
+            self._pop.pop(p.index)
+            self._pop.insert(new_idx, p)
+        if add:
+            # simulated annealing decided to add it either ways...we put the child somewhere based in the heat
+            new_idx = int((1 - heat) * len(self._pop))
+            self._pop.insert(new_idx, child)
+            self._pop_by_id[child.identity] = child
+
+    def shrink(self, size: int):
+        if size == 0 or size >= len(self._pop):
+            return
+        self._pop.pop(len(self._pop) - 1)
 
     @property
     def species(self):
@@ -146,23 +181,49 @@ class Population(object):
         return same_species
 
     def new_child(self):
-        a = random.choice(self._pop)
-        b = random.choice(self._pop)
+        a_sampler = Population.truncated_uniform_choice
+        b_sampler = Population.truncated_uniform_choice
+        if random.random() <= 0.5:
+            a_sampler = Population.truncated_exp_choice
+        else:
+            b_sampler = Population.truncated_exp_choice
+        a, a_idx = a_sampler(self._pop)
+        b, b_idx = (a, a_idx)
         while b == a:
-            b = random.choice(self._pop)
+            b, b_idx = b_sampler(self._pop)
+        a.index = a_idx
+        b.index = b_idx
         # mix chromosomes
         child_chromos = self._crossover(a.chromosomes, b.chromosomes)
+        self.crossovers += 1
         # give birth
         c = a.give_birth(b, child_chromos)
         if random.random() <= self._p_mutation:
+            self.spot_mutations += 1
             c.random_mutation()
         return c
+
+    def shuffle(self):
+        random.shuffle(self._pop)
 
     def __iter__(self):
         return iter(self._pop)
 
     def __len__(self) -> int:
         return len(self._pop)
+
+    @staticmethod
+    def truncated_exp_choice(pop):
+        x = len(pop) + 1
+        while x >= len(pop):
+            x = random.exponential() * len(pop)
+        return pop[int(x)], int(x)
+
+    @staticmethod
+    def truncated_uniform_choice(pop):
+        x = random.randint(low=0, high=len(pop), dtype=int)
+        return pop[x], x
+
 
     @staticmethod
     def generate(pcap_filename: str,
@@ -184,4 +245,6 @@ class Population(object):
                     p_mutation=population_mutation_probability,
                 )
             populations[indiv.species].add(indiv)
+        for pop in populations.values():
+            pop.shuffle()
         return populations

@@ -30,6 +30,10 @@ class Target(object):
         self.netmon_options = {}
         self.procmon_options = procmon_options if procmon_options is not None else {}
 
+    @property
+    def target_connection(self):
+        return self._target_connection
+
     def close(self):
         """
         Close connection to the target.

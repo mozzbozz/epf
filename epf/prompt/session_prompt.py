@@ -1,6 +1,13 @@
 import os
 import sys
 import signal
+import threading
+import time
+
+import hexdump
+import array
+import matplotlib.pyplot as plt
+import subprocess
 from typing import TYPE_CHECKING
 from prompt_toolkit import HTML, print_formatted_text
 from prompt_toolkit.styles import Style, merge_styles
@@ -9,6 +16,9 @@ from epf import constants
 from epf import exception
 
 from .prompt import CommandPrompt
+from . import stats
+from ..constants import INSTR_AFL_MAP_SIZE
+from .. import shm
 
 if TYPE_CHECKING:
     from epf.session import Session
@@ -33,17 +43,9 @@ class SessionPrompt(CommandPrompt):
                 'desc': 'Show Session Information',
                 'exec': self._cmd_info,
             },
-            # 'print': {
-            #     'desc': 'Print a test case by index',
-            #     'exec': self._cmd_print_test_case
-            # },
             'poc': {
                 'desc': 'Print the python poc code of test case by index',
                 'exec': self._cmd_print_poc_test_case
-            },
-            'performance': {
-                'desc': 'Performance',
-                'exec': self._cmd_performance,
             },
             'suspects': {
                 'desc': 'print information about the tests suspected of crashing something',
@@ -61,7 +63,19 @@ class SessionPrompt(CommandPrompt):
                 'desc': 'graph',
                 'exec': self._cmd_graph
             },
-
+            'ishowmem': {
+                'desc': 'Take a snapshot of the AFL-instrumentation\'s shared memory. -> ishowmem [start] [offset]',
+                'exec': self._cmd_ishowmem
+            },
+            'idumpmem': {
+                'desc': 'Take a snapshot of the AFL-instrumentation\'s shared memory and dump it to file -> idumpmem'
+                        '<filepath>',
+                'exec': self._cmd_idumpmem
+            },
+            'energy': {
+                'desc': 'Energy Plotting',
+                'exec': self._cmd_energy
+            },
         })
         return commands
 
@@ -83,9 +97,7 @@ class SessionPrompt(CommandPrompt):
         toolbar_message = HTML(f'<bttestn>{self.session.fuzz_protocol.name}</bttestn> <b>&gt;</b> '
                                f'Iterations: <bttestn>{self.session.test_case_cnt}</bttestn>'
                                f'| ExecTime (s): <bttestn>{elapsed}</bttestn>/<bttestn>{budget}</bttestn> '
-                               f'| PSeed: <bttestn>{self.session.fuzz_protocol.pcap_file}</bttestn> '
-                               f'| PRNG: <bttestn>{self.session.opts.seed}</bttestn> '
-                               f'| Active Pop.: <bttestn>{self.session.active_population.species}</bttestn> ')
+                               f'| Population: <bttestn>{self.session.active_population.species}</bttestn> ')
         return toolbar_message
 
     # --------------------------------------------------------------- #
@@ -93,7 +105,17 @@ class SessionPrompt(CommandPrompt):
     def handle_break(self, tokens: list) -> bool:
         if tokens[0] in ('c', 'continue'):
             self.session.is_paused = False
-            self.session.run_all()
+
+            s = stats.Stats()
+            s.set_session(self.session)
+            t = threading.Thread(target=self.session.run_all)
+            t.start()
+            s.run(fork=False)
+            self.session.is_paused = True
+            t.join()
+            print_formatted_text(HTML(' <testn>Pausing...</testn>'),
+                                 style=self.get_style())
+            self.session.is_paused = True
             return True
         else:
             return False
@@ -103,19 +125,13 @@ class SessionPrompt(CommandPrompt):
     def handle_exit(self, tokens: list) -> None:
         if len(tokens) > 0:
             if tokens[0] in ('exit', 'quit', 'q'):
+                self.session._restarter.kill()
                 sys.exit(0)
 
     # --------------------------------------------------------------- #
 
     def _signal_handler(self, _signal, frame):
-        self.session.is_paused = True
-        try:
-            print_formatted_text(HTML(' <testn>SIGINT received. Pausing fuzzing after this test case...</testn>'),
-                                 style=self.get_style())
-        except RuntimeError:
-            # prints are not safe in signal handlers.
-            # This happens if the signal is catch while printing
-            pass
+        pass
 
     # --------------------------------------------------------------- #
 
@@ -133,30 +149,12 @@ class SessionPrompt(CommandPrompt):
     # ================================================================#
 
     def _cmd_info(self, _):
-        self._print_color('gold', 'Session Options:')
-        for k, v in self.session.opts.__dict__.items():
-            print(f'  {str(k)} = {str(v)}')
-
-        self._print_color('gold', '\nPopulations:')
-        for k, v in self.session.populations.items():
-            fstr = f'  Population = \'{k}\', Individuals = {len(v)}'
-            if v == self.session.active_population:
-                self._print_color("green", fstr)
-            else:
-                print(fstr)
-
-    def _cmd_performance(self, _):
-        self._print_color('gold', 'Session Options:')
-        for k, v in self.session.opts.__dict__.items():
-            print(f'  {str(k)} = {str(v)}')
-
-        self._print_color('gold', '\nPopulations:')
-        for k, v in self.session.populations.items():
-            fstr = f'  Population = \'{k}\', Individuals = {len(v)}'
-            if v == self.session.active_population:
-                self._print_color("green", fstr)
-            else:
-                print(fstr)
+        if self.session.active_population is None:
+            print("No stats to show...session hasn't been initialized..")
+            return
+        s = stats.Stats()
+        s.set_session(self.session)
+        s.run(fork=False)
 
     def _cmd_print_test_case(self, tokens):
         try:
@@ -245,9 +243,70 @@ class SessionPrompt(CommandPrompt):
     # --------------------------------------------------------------- #
 
     def exit_message(self):
+        self.session._restarter.kill()
         print_formatted_text(HTML('<b>Exiting prompt...</b>'))
 
     # --------------------------------------------------------------- #
 
     def _cmd_graph(self, tokens):
         self.session.graph.visualize()
+
+
+    def _cmd_ishowmem(self, tokens):
+        """
+        Print a snapshot of the afl instrumentation's shared memory.
+        :param tokens: list of args -> memsnap [start] [offset]
+        :return: None
+        """
+        start = 0
+        stop = 0
+        try:
+            start = 0 if len(tokens) < 1 else int(int(tokens[0], 0) / 16)
+            stop = int(INSTR_AFL_MAP_SIZE / 16) if len(tokens) < 2 else int(int(tokens[1], 0) / 16 + start)
+        except ValueError:
+            pass
+        hdr = ('Base', *(x for x in range(0, 16)), 'ASCII')
+        try:
+            less = subprocess.Popen(["less"], stdin=subprocess.PIPE);
+            less.stdin.write(('{:10}' + ('{:02X} ' * 8 + ' ') * 2 + '{}').format(*hdr).encode(encoding='utf-8'))
+            less.stdin.write(b'\n' + b'-' * 76 + b'\n')
+            for i, line in enumerate(hexdump.hexdump(data=shm.get().buf, result='generator')):
+                if start <= i < stop:
+                    less.stdin.write(line.encode(encoding='utf-8'))
+                    less.stdin.write(b'\n')
+            less.stdin.close()
+            less.wait()
+        except BrokenPipeError:
+            pass
+
+    # --------------------------------------------------------------- #
+
+    def _cmd_idumpmem(self, tokens):
+        """
+        Dump a snapshot of the afl instrumentation's shared memory right into a binary file
+        :param tokens: list of args -> memdump <filepath>
+        :return: None
+        """
+        if len(tokens) < 1:
+            self._print_error("missing filepath parameter")
+            return
+        filepath = tokens[0]
+        try:
+            with open(filepath, 'wb') as fd:
+                clone = bytearray(array.array('B', shm.get().buf))
+                fd.write(clone)
+                fd.flush()
+                self._print_color('green', 'Dumped {} bytes shared memory into \'{}\''.format(len(clone), filepath))
+        except IOError as io:
+            self._print_error(io)
+
+    # --------------------------------------------------------------- #
+
+    def _cmd_energy(self, tokens):
+        """
+        Calculate a branch report based on the AFL instrumentation.
+        :param tokens: ignored
+        :return: None
+        """
+        plt.plot(self.session.energy_hist)
+        plt.show()

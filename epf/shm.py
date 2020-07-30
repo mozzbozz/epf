@@ -1,5 +1,6 @@
 import atexit
 import array
+import time
 from multiprocessing import shared_memory
 
 from .constants import INSTR_AFL_MAP_SIZE
@@ -11,13 +12,26 @@ class AFLShm(shared_memory.SharedMemory):
     AFLShm is a wrapper for multiprocessing.shared_memory.SharedMemory, which automatically initializes the
     underlying object in such a way that it is compatible to the AFL instrumentation.
     IMPORTANT: Python's new shared_memory Module uses MMAP (shm_open, mmap, ...) , but afl-clang-fast uses the older
-    SystemV API (shmget, shmat, ...) by default. You need to compile AFL and afl-clang-fast with -DUSEMMAP in order for
+    SystemV API (shmget, shmat, ...) by default. You need to compile AFL++ with -DUSEMMAP in order for
     this to work.
     """
     def __init__(self, identifier: str = None):
         if identifier is None:
-            identifier = 'fuzzowski_afl_{}_{}'.format(get_random_string(4), get_random_string(12))
+            identifier = 'epf_afl_{}_{}'.format(get_random_string(4), get_random_string(12))
         super().__init__(name=identifier, create=True, size=INSTR_AFL_MAP_SIZE)
+        self.state = self.directed_branch_coverage()
+        self.tstamp = time.time()
+
+    def update_state(self):
+        if self.changed:
+            self.state = self.directed_branch_coverage()
+
+    @property
+    def changed(self):
+        res = self.directed_branch_coverage()[0] != self.state[0]
+        if res:
+            self.tstamp = time.time()
+        return res
 
     def directed_branch_coverage(self) -> (int, int):
         snap = array.array('B', self.buf)

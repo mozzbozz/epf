@@ -1,3 +1,7 @@
+import signal
+import psutil
+import time
+
 from .irestarter import IRestarter
 from ..constants import INSTR_AFL_ENV
 from .. import shm
@@ -41,6 +45,9 @@ class AFLForkRestarter(IRestarter):
         # execve(3) params
         self._argv = shlex.split(self._cmd)
         self._path = self._argv[0]
+        self._pid = 0
+        self.restarts = 0
+        self.crashes = 0
 
     @staticmethod
     def name() -> str:
@@ -71,7 +78,32 @@ class AFLForkRestarter(IRestarter):
         identifier = shm.get().name  # get instrumentation shared memory id
         environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
         cid = self._fork(environ)  # actually fork
+        self._pid = cid
+        self.restarts += 1
         return f"Forking into AFL-instrumented binary. Command: {self._cmd}, Shared Memory ID: {identifier}, PID: {cid}"
+
+    def kill(self):
+        if self._pid != 0:
+            try:
+                proc = psutil.Process(self._pid)
+                for child in proc.children():
+                    child.kill()
+                proc.kill()
+            except Exception:
+                pass
+
+    def healthy(self):
+        try:
+            proc = psutil.Process(self._pid)
+            res = proc.status() not in [psutil.STATUS_DEAD, psutil.STATUS_STOPPED]
+            if not res:
+                self.crashes += 1
+                self.kill()
+            return res
+        except Exception as e:
+            pass
+        self.crashes += 1
+        return False
 
     def _fork(self, environ: {}) -> int:
         """
@@ -83,7 +115,8 @@ class AFLForkRestarter(IRestarter):
         cid = os.fork()
         if cid == 0:
             # child
-            os.execve(self._path, self._argv, environ)
+            os.setsid()  # create new session
+            os.execve(self._path, self._argv, environ)  # execve into command
             # never returns, see man execve(3)
         # parent
         return cid

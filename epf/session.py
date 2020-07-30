@@ -1,5 +1,6 @@
 import os
 import time
+from numpy import random
 
 from epf import Target, FuzzLogger, exception
 from epf.loggers import FuzzLoggerText
@@ -76,20 +77,26 @@ class Session(object):
                  restarter: IRestarter = None,
                  monitors: "list of IMonitor" = [],
                  seed: int = 0,
-                 fuzz_protocol=None,
-                 time_budget=0.0
+                 fuzz_protocol: "IFuzzer" = None,
+                 alpha: float = 0.0,
+                 beta: float = 0.0,
+                 population_limit: int = 10000,
+                 time_budget: float = 0.0
                  ):
         super().__init__()
 
         self.opts = SessionOptions(
             restart_sleep_time=restart_sleep_time,
             # Transmission Options
-            host=target._target_connection.host,
-            port=target._target_connection.port,
-            send_timeout=target._target_connection._send_timeout,
-            recv_timeout=target._target_connection._recv_timeout,
+            host=target.target_connection.host,
+            port=target.target_connection.port,
+            send_timeout=target.target_connection._send_timeout,
+            recv_timeout=target.target_connection._recv_timeout,
             pcap=fuzz_protocol.pcap_file,
             seed=seed,
+            alpha=alpha,
+            beta=beta,
+            population_limit=population_limit,
             time_budget=time_budget
         )
 
@@ -133,14 +140,32 @@ class Session(object):
         self.populations = self.fuzz_protocol.get_populations(self)
         self.population_iterator = iter(sorted(self.populations.keys()))
         self.active_population = self.populations[next(self.population_iterator)]
+        self.drain_seed_iterator = iter(self.active_population)
         self.active_individual = None
+        self.active_testcase = None
+        self.drain_seed_individuals = False
 
-        self.is_paused = True
+        self.is_paused = False
         self.prompt = None
+        self.energy = 1.0
+        self.energy_hist = []
+        self.energy_threshold = 0.05
+        self.energy_periods = 0
+        self.reheat_count = 0
+        self._restarter.restart()
 
     # ================================================================#
     # Actions                                                         #
     # ================================================================#
+
+    def cooldown(self) -> float:
+        self.energy *= self.opts.alpha
+        return self.energy
+
+    def reheat(self) -> float:
+        self.reheat_count += 1
+        self.energy = min(1.0, self.energy / self.opts.beta)
+        return self.energy
 
     def start(self):
         """
@@ -152,7 +177,16 @@ class Session(object):
     # --------------------------------------------------------------- #
 
     def schedule_population(self):
-        self.active_population = next(iter(self.populations.items()))[1]
+        if self.energy <= self.energy_threshold:
+            key = next(self.population_iterator, None)
+            if key is None:
+                # reset
+                self.population_iterator = iter(sorted(self.populations.keys()))
+                self.energy_periods += 1
+                key = next(self.population_iterator)
+            self.active_population = self.populations[key]
+            self.energy = 1.0
+        self.cooldown()
 
     def generate_individual(self):
         self.active_individual = self.active_population.new_child()
@@ -160,21 +194,26 @@ class Session(object):
     def evaluate_individual(self):
         # 1. create test case
         self.test_case_cnt += 1
-        testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
+        self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
         # 2. fuzz
         # try:
-        testcase.run()
-        # except Exception:
-        #    pass
-        # TODO: 3. evaluate coverage and process feedback
-        # self._examine_testcase(...)
+        self.active_testcase.run()
+        # time.sleep(2.0)
+        if self.active_testcase.crashed:
+            # TODO: CRASH HANDLING
+            self._restarter.restart()
 
     def update_population(self):
-        print("TODO UPDATE_POPULATION")
-        self.active_population.add(self.active_individual)
+        increase = self.active_testcase.coverage_increase
+        if self.active_testcase.coverage_increase:
+            self.reheat()
+            self.active_population.update(self.active_individual, heat=self.energy, add=increase)
+        self.active_population.update(self.active_individual, heat=self.energy, add=random.random() <= self.energy)
+        self.active_population.shrink(self.opts.population_limit)
 
     def update_bugs(self):
-        print("TODO UPDATE_BUGS")
+        pass
+        # print("TODO UPDATE_BUGS")
 
     def cont(self) -> bool:
         """
@@ -196,20 +235,35 @@ class Session(object):
         result = not (self.time_budget.exhausted or self.is_paused)
         if result:
             self.time_budget.start()
+        self.energy_hist += [self.energy]
         return result
 
+    def drain(self):
+        while not self.is_paused:
+            self.active_individual = next(self.drain_seed_iterator, None)
+            if self.active_individual is None:
+                key = next(self.population_iterator, None)
+                if key is None:
+                    # reset
+                    self.population_iterator = iter(sorted(self.populations.keys()))
+                    self.drain_seed_individuals = False
+                    return
+                self.active_population = self.populations[key]
+                self.drain_seed_iterator = iter(self.active_population)
+                continue
+            _ = self.active_testcase.coverage_increase
+            self.evaluate_individual()
+            self.update_bugs()
+
     def run_all(self):
+        if self.drain_seed_individuals:
+            self.drain()
         while self.cont():                  # while CONTINUE(C) do X
-            self.schedule_population()      #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- -_-
+            self.schedule_population()      #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- X
             self.generate_individual()      #   tcs  <- INPUTGEN(conf) <----- NEXT
             self.evaluate_individual()      #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
             self.update_population()        #   C <- CONFUPDATE(C', conf, execinfos)
             self.update_bugs()              #   B <- B u B'
-
-            # TODO: When running all test cases and test_interval is set, check if you need to restart the target
-            # if self.opts.restart_interval > 0 and self.test_case.id % self.opts.restart_interval == 0:
-            #     self.logger.open_test_step(f"Restart interval of {self.opts.restart_interval} reached")
-            #     self.restart_target()
 
     # ================================================================#
     # Graph related functions                                         #
@@ -241,6 +295,7 @@ class Session(object):
         Args:
             test_case: The test case to add as a suspect
         """
+        return
         if test_case.id not in self.suspects:
             self.suspects[test_case.id] = test_case
             self.logger.log_info(f'Added test case {test_case.id} as a suspect')
@@ -279,15 +334,6 @@ class Session(object):
         latest_test.add_error(error)
         self.add_suspect(latest_test)
         self.previous_test_possible = False
-
-    def add_latest_test(self, test_case: TestCase):
-        pass
-        # """ Add a test case to the list of latest test cases keeping the maximum number"""
-        # # self.logger.log_info(f"Adding {test_case.id} to latest cases")
-        # self.previous_test_possible = True
-        # if len(self.latest_tests) == self.opts.tests_number_to_keep:
-        #     self.latest_tests.pop()  # Take latest test
-        # self.latest_tests.insert(0, test_case)
 
     def restart_target(self):
         """ It will call the restart() command of the IRestarter instance, if a restarter module was set"""

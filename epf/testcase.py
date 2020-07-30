@@ -4,6 +4,7 @@ from typing import List, TYPE_CHECKING, Any
 from epf.chromo import Individual
 from epf.ip_constants import DEFAULT_MAX_RECV
 from epf import exception, helpers
+from epf import shm
 
 if TYPE_CHECKING:
     from epf.session import Session
@@ -28,13 +29,15 @@ class TestCase(object):
 
         self.name = f"{self.id}.{self.individual.species.replace(' ', '_')}.{str(self.individual.identity)[-12:]}"
         self.errors = []
+        self.coverage_increase = None
+        self.crashed = False
+        self.individual.testcase = self
 
     def add_error(self, error):
         """ Add an error to the current case """
         self.errors.append(error)
 
-    # def run(self, fuzz: bool = True, retry: bool = True) -> bool:
-    def run(self, retry: bool = True) -> bool:
+    def run(self) -> bool:
 
         """
         Run the test case, transmitting the full path
@@ -46,16 +49,13 @@ class TestCase(object):
         Returns: True if the TestCase was run and data was transmitted (even if transmission was cut)
                  False if there was a connection issue and the target was paused, so the TestCase was not run
         """
-        # First step is to open the target
-        # TODO: Mechanism for not opening if want to keep an open connection between fuzzed packets
-        #  (e.g. CLI in Telnet Session)
+        if self.coverage_increase is not None:
+            return False
         try:
-            self.logger.open_test_case(f"{self.name}",
-                                      name=self.name, index=self.id)
+            self.logger.open_test_case(f"{self.name}", name=self.name, index=self.id)
 
             self.open_fuzzing_target()
 
-            fuzzed_sent = False
             # TODO: TESTCASE INTEGRATION
             # traverse_to_node()
             # for idx, edge in enumerate(self.path, start=1):  # Now we go through our path, sending each request
@@ -63,12 +63,11 @@ class TestCase(object):
             #    callback = edge.callback
 
             #    if request == self.request:
-                    # This is the node we are fuzzing
+            #       # This is the node we are fuzzing
             #        if fuzz:
             self.logger.open_test_step(f'Fuzzing individual {self.individual.identity}')
             # callback_data = self._callback_current_node(node=request, edge=edge)
             self.transmit(self.individual)  #, callback_data=callback_data)
-            fuzzed_sent = True
             #        else:
             #            self.logger.open_test_step(f'Transmit node {request.name}')
             #            callback_data = self._callback_current_node(node=request, edge=edge, original=True)
@@ -88,15 +87,16 @@ class TestCase(object):
             #            self.add_error(e)
             #            self.session.add_suspect(self)
             #            raise exception.EPFTestCaseAborted(str(e))
-
             self.session.target.close()
-            self.session.add_latest_test(self)
+            coverage_map = shm.get()
+            self.coverage_increase = coverage_map.changed
+            coverage_map.update_state()
+            self.crashed = not self.session._restarter.healthy()
             return True
         except exception.EPFPaused:
             return False  # Returns False when the fuzzer got paused, as it did not run the TestCase
         except exception.EPFTestCaseAborted as e:  # There was a transmission Error, we end the test case
             self.logger.log_info(f'Test case aborted due to transmission error: {str(e)}')
-            self.session.add_latest_test(self)
             return True
 
     def open_fuzzing_target(self):
@@ -120,12 +120,11 @@ class TestCase(object):
                 self.session.restart_target()  # Restart the target if a restarter was set
                 recovered = self.wait_until_target_recovered()  # Wait for target to recover
                 if recovered:
-                    # target.open()  # Open a new connection, as the last one will be closed
                     self.open_fuzzing_target()
                 else:
                     raise
 
-    def transmit(self, individual: Individual, callback_data: bytes = None, original: bool = False, receive=True):
+    def transmit(self, individual: Individual, callback_data: bytes = None, original: bool = False, receive=False):
         """
         Render and transmit a fuzzed node, process callbacks accordingly.
 
@@ -140,16 +139,10 @@ class TestCase(object):
         """
         # if callback_data:
         #     data = callback_data
-        # else:
-        #     if original:
-        #         data = request.original_value
-        #     else:
-        #         data = request.render(
         data = individual.serialize()
 
         # 1. SEND DATA
         try:
-            self.last_send = data
             self.session.target.send(data)
         except exception.EPFTargetConnectionReset as e:  # Connection was reset
             self.logger.log_info("Target connection reset.")
@@ -177,8 +170,8 @@ class TestCase(object):
             try:
                 receive_failed = False
                 error = ''
-                self.last_recv = self.session.target.recv(DEFAULT_MAX_RECV)
-                if not self.last_recv:  # Nothing received, probably conn reset
+                last_recv = self.session.target.recv(DEFAULT_MAX_RECV)
+                if not last_recv:  # Nothing received, probably conn reset
                     receive_failed = True
                     error = "Nothing received. Connection Reset?"
                     # raise exception.EPFTestCaseAborted("Receive failed. Aborting Test Case")
@@ -300,12 +293,3 @@ class TestCase(object):
         #                          original=original)
 
         # return data
-
-    @property
-    def disabled(self):
-        """Returns if the TestCase is disabled due to the actual request or actual mutant is disabled"""
-        return False
-        # try:
-        #     return self.request.disabled or self.request.mutant.disabled
-        # except AttributeError:
-        #     return False

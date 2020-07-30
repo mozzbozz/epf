@@ -10,7 +10,7 @@ import socket
 import struct
 import time
 import zlib
-import random
+from numpy import random
 import string
 
 from prompt_toolkit.formatted_text import FormattedText
@@ -468,4 +468,4 @@ def get_all_subclasses(cls):
 
 
 def get_random_string(length: int, chars: [] = string.ascii_uppercase + string.ascii_lowercase) -> str:
-    return ''.join(random.SystemRandom().choice(chars) for _ in range(0, length))
+    return ''.join(random.choice([x for x in chars]) for _ in range(0, length))

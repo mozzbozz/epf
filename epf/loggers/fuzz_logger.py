@@ -24,10 +24,12 @@ class FuzzLogger(IFuzzLogger):
         self.all_test_cases = []
 
     def open_test_step(self, description):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.open_test_step(description=description)
 
     def log_error(self, description):
+        return
         if self._cur_test_case_id not in self.error_test_cases:
             self.error_test_cases[self._cur_test_case_id] = []
         self.error_test_cases[self._cur_test_case_id].append(description)
@@ -35,6 +37,7 @@ class FuzzLogger(IFuzzLogger):
             fuzz_logger.log_error(description=description)
 
     def log_fail(self, description=""):
+        return
         if self._cur_test_case_id not in self.failed_test_cases:
             self.failed_test_cases[self._cur_test_case_id] = []
         self.failed_test_cases[self._cur_test_case_id].append(description)
@@ -42,14 +45,17 @@ class FuzzLogger(IFuzzLogger):
             fuzz_logger.log_fail(description=description)
 
     def log_info(self, description):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.log_info(description=description)
 
     def log_recv(self, data):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.log_recv(data=data)
 
     def log_pass(self, description=""):
+        return
         if self._cur_test_case_id not in self.passed_test_cases:
             self.passed_test_cases[self._cur_test_case_id] = []
         self.passed_test_cases[self._cur_test_case_id].append(description)
@@ -57,24 +63,29 @@ class FuzzLogger(IFuzzLogger):
             fuzz_logger.log_pass(description=description)
 
     def log_check(self, description):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.log_check(description=description)
 
     def open_test_case(self, test_case_id, name, index, *args, **kwargs):
+        return
         self._cur_test_case_id = test_case_id
         self.all_test_cases.append(test_case_id)
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.open_test_case(test_case_id=test_case_id, name=name, index=index)
 
     def log_send(self, data):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.log_send(data=data)
 
     def log_warn(self, description):
+        return
         for fuzz_logger in self._fuzz_loggers:
             fuzz_logger.log_warn(description=description)
 
     def failure_summary(self):
+        return ""
         """Return test summary string based on fuzz logger results.
 
         :return: Test summary string, may be multi-line.
