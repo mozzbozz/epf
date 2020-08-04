@@ -389,27 +389,6 @@ def _indent_after_first_line(lines, amount, ch=' '):
     return ('\n' + padding).join(lines.split('\n'))
 
 
-def format_log_msg(msg_type, description=None, data=None, indent_size=2, timestamp=None, format_type='terminal'):
-    if data is None:
-        data = b''
-    if timestamp is None:
-        timestamp = get_time_stamp()
-
-    if description is not None and description != '':
-        msg = description
-    elif data is not None and len(data) > 0:
-        # msg = hex_to_hexstr(input_bytes=data)
-        msg = repr_input_bytes(data)
-    else:
-        msg = ''
-
-    msg = test_step_info[msg_type][format_type].format(msg=msg, n=len(data))
-    msg = _indent_all_lines(msg, (test_step_info[msg_type]['indent']) * indent_size)
-    msg = timestamp + ' ' + _indent_after_first_line(msg, len(timestamp) + 1)
-
-    return msg
-
-
 def format_msg(msg, indent_level, indent_size, timestamp=None):
     msg = _indent_all_lines(msg, indent_level * indent_size)
     if timestamp is None:

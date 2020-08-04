@@ -14,7 +14,6 @@ import random as stdrandom
 from epf import Target, SocketConnection
 from epf.fuzzers import IFuzzer
 from epf.restarters import IRestarter
-from epf.monitors import IMonitor, IThreadMonitor
 from epf.session import Session
 
 logo = """
@@ -49,7 +48,6 @@ class EPF(object):
             restart_sleep_time=self.args.restart_sleep_time,
             target=self.target,
             restarter=self.restart_module,
-            monitors=self.monitors,
             fuzz_protocol=self.args.fuzz_protocol,
             seed=self.args.seed,
             time_budget=self.args.time_budget,
@@ -101,16 +99,6 @@ class EPF(object):
         restarters_grp.add_argument("--restart-sleep", dest="restart_sleep_time", type=int, default=5,
                                     help='Set sleep seconds after a crash before continue (Default 5)')
 
-        monitor_classes = [monitor_class for monitor_class in IMonitor.__subclasses__() if
-                           monitor_class != IThreadMonitor]
-        monitor_names = [monitor.name() for monitor in monitor_classes]
-        monitors_grp = self.parser.add_argument_group('Monitor options')
-        monitors_help = 'Monitor Modules:\n'
-        for monitor in monitor_classes:
-            monitors_help += '  {}: {}\n'.format(monitor.name(), monitor.help())
-        monitors_grp.add_argument('--monitors', '-m', nargs='+', default=[],
-                                  help=monitors_help, choices=monitor_names)
-
     def _parse_args(self) -> argparse.Namespace:
         """
         Parse arguments with argparse
@@ -134,11 +122,6 @@ class EPF(object):
             except IndexError:
                 print(f"The restarter module {args.restart[0]} does not exist!")
                 exit(1)
-
-        self.monitors = []
-        if len(args.monitors) > 0:
-            self.monitors = [mon for mon in IMonitor.__subclasses__() if
-                             mon != IThreadMonitor and mon.name() in args.monitors]
 
         return args
 

@@ -1,15 +1,12 @@
 from ..ip_constants import DEFAULT_MAX_RECV
-from ..loggers import FuzzLoggerText
 from copy import deepcopy
 
 
 class Target(object):
     """Target descriptor container.
 
-    Takes an ITargetConnection and wraps send/recv with appropriate
-    FuzzDataLogger calls.
+    Takes an ITargetConnection and wraps send/recv
 
-    Contains a logger which is configured by Session.add_target().
 
     Example:
         tcp_target = Target(SocketConnection(host='127.0.0.1', port=17971))
@@ -18,21 +15,9 @@ class Target(object):
         connection (itarget_connection.ITargetConnection): Connection to system under test.
     """
 
-    def __init__(self, connection, procmon=None, procmon_options=None, netmon=None):
-        self._fuzz_data_logger = None
+    def __init__(self, connection):
 
-        self._target_connection = connection
-        self.procmon = procmon
-        self.netmon = netmon
-
-        # set these manually once target is instantiated.
-        self.vmcontrol = None
-        self.netmon_options = {}
-        self.procmon_options = procmon_options if procmon_options is not None else {}
-
-    @property
-    def target_connection(self):
-        return self._target_connection
+        self.target_connection = connection
 
     def close(self):
         """
@@ -40,9 +25,7 @@ class Target(object):
 
         :return: None
         """
-        self._fuzz_data_logger.log_info('Closing target connection...')
-        self._target_connection.close()
-        self._fuzz_data_logger.log_info('Connection closed.')
+        self.target_connection.close()
 
     def open(self):
         """
@@ -50,9 +33,7 @@ class Target(object):
 
         :return: None
         """
-        self._fuzz_data_logger.log_info('Opening target connection ({0})...'.format(self._target_connection.info))
-        self._target_connection.open()
-        self._fuzz_data_logger.log_info('Connection opened.')
+        self.target_connection.open()
 
     def recv(self, max_bytes: int = DEFAULT_MAX_RECV):
         """
@@ -64,13 +45,8 @@ class Target(object):
         Returns:
             Received data.
         """
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_info("Receiving...")
 
-        data = self._target_connection.recv(max_bytes=max_bytes)
-
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_recv(data)
+        data = self.target_connection.recv(max_bytes=max_bytes)
 
         return data
 
@@ -84,13 +60,7 @@ class Target(object):
         Returns:
             Received data.
         """
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_info("Receiving...")
-
-        data = self._target_connection.recv_all(max_bytes=max_bytes)
-
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_recv(data)
+        data = self.target_connection.recv_all(max_bytes=max_bytes)
 
         return data
 
@@ -104,33 +74,5 @@ class Target(object):
         Returns:
             None
         """
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_send(data)
-
-        num_sent = self._target_connection.send(data=data)
-
-        if self._fuzz_data_logger is not None:
-            self._fuzz_data_logger.log_info("{0} bytes sent".format(num_sent))
-
-    def set_fuzz_data_logger(self, fuzz_data_logger):
-        """
-        Set this object's fuzz data logger -- for sent and received fuzz data.
-
-        :param fuzz_data_logger: New logger.
-        :type fuzz_data_logger: ifuzz_logger.IFuzzLogger
-
-        :return: None
-        """
-        self._fuzz_data_logger = fuzz_data_logger
-
-    def get_monitor_copy(self):
-        new_target = Target(connection=deepcopy(self._target_connection))
-        new_target.set_fuzz_data_logger(FuzzLoggerText(file_handle=open('/dev/null', 'a')))
-        return new_target
-
-    @property
-    def target_connection(self):
-        return self._target_connection
-
-
+        num_sent = self.target_connection.send(data=data)
 

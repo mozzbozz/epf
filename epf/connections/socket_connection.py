@@ -263,7 +263,7 @@ class SocketConnection(ITargetConnection):
                     (e.errno == errno.ENETRESET) or \
                     (e.errno == errno.ETIMEDOUT) or \
                     (e.errno == errno.EPIPE):
-                raise(exception.EPFTargetConnectionReset(None, sys.exc_info()[2]))
+                raise e
                 # raise(exception.EPFTargetConnectionReset, None, sys.exc_info()[2])
             else:
                 raise

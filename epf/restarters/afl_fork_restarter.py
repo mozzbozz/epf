@@ -1,12 +1,16 @@
-import signal
-import psutil
+import inspect
+import subprocess
 import time
+from typing import Tuple
+
+import psutil
 
 from .irestarter import IRestarter
 from ..constants import INSTR_AFL_ENV
 from .. import shm
 import shlex
 import os
+import sys
 
 
 class AFLForkRestarter(IRestarter):
@@ -23,7 +27,6 @@ class AFLForkRestarter(IRestarter):
 
     Consequently, it is up to the forking parent to allocate, manage and finally free shared memory.
     Due to Fuzzowski's architecture, this module does (at its worst) create shared memory if not already done.
-    It's the job of mutants and monitors to further manage such memory.
 
     Note: it does NOT employ the method that has been discussed in
             http://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html !
@@ -41,13 +44,14 @@ class AFLForkRestarter(IRestarter):
         :param kwargs: ignored
         """
         # the command to execute
-        self._cmd = cmd
+        self.cmd = cmd
         # execve(3) params
-        self._argv = shlex.split(self._cmd)
+        self._argv = shlex.split(self.cmd)
         self._path = self._argv[0]
-        self._pid = 0
-        self.restarts = 0
+        self.process = None
+        self.restarts = -1
         self.crashes = 0
+        self.retval = None
 
     @staticmethod
     def name() -> str:
@@ -67,43 +71,56 @@ class AFLForkRestarter(IRestarter):
         """
         return "'<executable> [<argument> ...]' (Pass command and arguments within quotes, as only one argument)"
 
-    def restart(self, *args, **kwargs) -> str:
+    def restart(self, *args, **kwargs) -> bool:
         """
         Restarts the target
 
         :param args: ignored
         :param kwargs: ignored
-        :return: information format str
+        :return: bool
         """
-        identifier = shm.get().name  # get instrumentation shared memory id
-        environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
-        cid = self._fork(environ)  # actually fork
-        self._pid = cid
+        try:
+            identifier = shm.get().name  # get instrumentation shared memory id
+            environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
+            cid = self._fork(environ)  # actually fork
+            self.process = psutil.Process(cid)
+            time.sleep(2.0)
+        except Exception as e:
+            return False
         self.restarts += 1
-        return f"Forking into AFL-instrumented binary. Command: {self._cmd}, Shared Memory ID: {identifier}, PID: {cid}"
+        return self.healthy()
+
+    def assert_healthy(self, force_kill=False) -> Tuple[bool, int]:
+        while not self.healthy() or force_kill:
+            self.kill()
+            self.restart()
+            force_kill = False
+        ret = (False, 0) if self.retval is None else (True, self.retval)
+        if self.retval is not None:
+            self.crashes += 1
+        self.retval = None
+        return ret
 
     def kill(self):
-        if self._pid != 0:
-            try:
-                proc = psutil.Process(self._pid)
-                for child in proc.children():
-                    child.kill()
-                proc.kill()
-            except Exception:
-                pass
+        if self.process is None:
+            return
+        children = self.process.children()
+        for child in children:
+            child.terminate()
+        _, alive = psutil.wait_procs(children, timeout=1.0)
+        for bad_boy in alive:
+            bad_boy.kill()
+        self.process.terminate()
+        _, alive = psutil.wait_procs([self.process], timeout=1.0)
+        if len(alive) > 0:
+            self.process.kill()
+            psutil.wait_procs([self.process], timeout=1.0)
+        if self.retval is None:
+            self.retval = self.process.returncode
+        self.process = None
 
-    def healthy(self):
-        try:
-            proc = psutil.Process(self._pid)
-            res = proc.status() not in [psutil.STATUS_DEAD, psutil.STATUS_STOPPED]
-            if not res:
-                self.crashes += 1
-                self.kill()
-            return res
-        except Exception as e:
-            pass
-        self.crashes += 1
-        return False
+    def healthy(self) -> bool:
+        return self.process is not None and self.process.status() not in [psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE]
 
     def _fork(self, environ: {}) -> int:
         """
@@ -112,13 +129,13 @@ class AFLForkRestarter(IRestarter):
         :param environ: Dictionary representing the environment variables of the child process
         :return: child pid (int)
         """
-        cid = os.fork()
-        if cid == 0:
-            # child
-            os.setsid()  # create new session
-            os.execve(self._path, self._argv, environ)  # execve into command
-            # never returns, see man execve(3)
-        # parent
+        cid = subprocess.Popen(args=self._argv,
+                               shell=False,
+                               env=environ,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL,
+                               start_new_session=True,
+                               close_fds=True).pid
         return cid
 
 

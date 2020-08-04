@@ -25,3 +25,11 @@ class IRestarter(object, metaclass=abc.ABCMeta):
     def restart(self, *args, **kwargs) -> str or None:
         """Restart the target with magic"""
         pass
+
+    @abc.abstractmethod
+    def kill(self):
+        pass
+
+    @abc.abstractmethod
+    def healthy(self) -> bool:
+        pass

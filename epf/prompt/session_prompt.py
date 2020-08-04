@@ -43,22 +43,23 @@ class SessionPrompt(CommandPrompt):
                 'desc': 'Show Session Information',
                 'exec': self._cmd_info,
             },
-            'poc': {
-                'desc': 'Print the python poc code of test case by index',
-                'exec': self._cmd_print_poc_test_case
-            },
+            # TODO: more insights
+            # 'poc': {
+            #     'desc': 'Print the python poc code of test case by index',
+            #     'exec': self.cmd_print_poc_test_case
+            # },
             'suspects': {
                 'desc': 'print information about the tests suspected of crashing something',
                 'exec': self._cmd_suspects
             },
-            'suspects-del': {
-                'desc': 'delete suspect',
-                'exec': self._cmd_delsuspect
-            },
-            'restart': {
-                'desc': 'Launch the restarter module to restart the target',
-                'exec': self._cmd_restart
-            },
+            # 'suspects-del': {
+            #     'desc': 'delete suspect',
+            #     'exec': self.cmd_delsuspect
+            # },
+            # 'restart': {
+            #     'desc': 'Launch the restarter module to restart the target',
+            #     'exec': self.cmd_restart
+            # },
             'graph': {
                 'desc': 'graph',
                 'exec': self._cmd_graph
@@ -125,7 +126,7 @@ class SessionPrompt(CommandPrompt):
     def handle_exit(self, tokens: list) -> None:
         if len(tokens) > 0:
             if tokens[0] in ('exit', 'quit', 'q'):
-                self.session._restarter.kill()
+                self.session.restarter.kill()
                 sys.exit(0)
 
     # --------------------------------------------------------------- #
@@ -155,6 +156,10 @@ class SessionPrompt(CommandPrompt):
         s = stats.Stats()
         s.set_session(self.session)
         s.run(fork=False)
+
+    def _cmd_suspects(self, _):
+        for suspect in self.session.suspects:
+            print(suspect)
 
     def _cmd_print_test_case(self, tokens):
         try:
@@ -190,23 +195,23 @@ class SessionPrompt(CommandPrompt):
 
     # --------------------------------------------------------------- #
 
-    def _cmd_suspects(self, tokens):
-        try:
-            test_case_index = int(tokens[0])
-            suspect = self.session.suspects[test_case_index]
-            print(suspect.info())
-        except IndexError:  # No index specified, Show all suspects
-            for suspect_id, suspect in self.session.suspects.items():
-                if suspect is not None:
-                    print(suspect.info())
-                else:
-                    print(f'Test Case {suspect_id}')
-            return
-        except ValueError:
-            self._print_error('suspects usage: suspects [TEST_ID]')
-            return
-        except KeyError:
-            self._print_error(f'Suspect with id {tokens[0]} not found')
+    # def _cmd_suspects(self, tokens):
+    #     try:
+    #         test_case_index = int(tokens[0])
+    #         suspect = self.session.suspects[test_case_index]
+    #         print(suspect.info())
+    #     except IndexError:  # No index specified, Show all suspects
+    #         for suspect_id, suspect in self.session.suspects.items():
+    #             if suspect is not None:
+    #                 print(suspect.info())
+    #             else:
+    #                 print(f'Test Case {suspect_id}')
+    #         return
+    #     except ValueError:
+    #         self._print_error('suspects usage: suspects [TEST_ID]')
+    #         return
+    #     except KeyError:
+    #         self._print_error(f'Suspect with id {tokens[0]} not found')
 
     def _cmd_delsuspect(self, tokens):
         try:
@@ -243,7 +248,7 @@ class SessionPrompt(CommandPrompt):
     # --------------------------------------------------------------- #
 
     def exit_message(self):
-        self.session._restarter.kill()
+        self.session.restarter.kill()
         print_formatted_text(HTML('<b>Exiting prompt...</b>'))
 
     # --------------------------------------------------------------- #

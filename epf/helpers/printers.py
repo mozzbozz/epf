@@ -104,7 +104,7 @@ from pygments.lexers.python import Python3Lexer
 #    for e in path:
 #        block = e.dst
 #        blocks_code += request_to_python(block, indent=4)
-#        blocks_code += get_send_python(target._target_connection, block.name)
+#        blocks_code += get_send_python(target.target_connection, block.name)
 #        if receive_data_after_each_request and e != path[-1]:
 #            blocks_code += 'sock.recv(65535)\n\n'
 #        if receive_data_after_fuzz and e == path[-1]:
@@ -119,7 +119,7 @@ from pygments.lexers.python import Python3Lexer
 #        '{}'
 #        'sock.close()\n'
 #    ).format(
-#        get_connect_python(target._target_connection),
+#        get_connect_python(target.target_connection),
 #        blocks_code
 #    )
 #    return exploit_code

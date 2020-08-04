@@ -2,15 +2,13 @@ import os
 import time
 from numpy import random
 
-from epf import Target, FuzzLogger, exception
-from epf.loggers import FuzzLoggerText
+from epf import Target, exception
 from epf.restarters import IRestarter
 from . import helpers
 from . import constants
 from epf.graph import Graph
 from typing import Dict, Any
 
-from .chromo import Population, Individual
 from .testcase import TestCase
 from epf.prompt.session_prompt import SessionPrompt
 
@@ -64,18 +62,14 @@ class Session(object):
 
     Args:
         restart_sleep_time (float): Time in seconds to sleep when target can't be restarted. Default 5.
-        fuzz_loggers (list of ifuzz_logger.IFuzzLogger): For saving test data and results.. Default Log to STDOUT.
         target (Target):        Target for fuzz session. Target must be fully initialized. Default None.
         restarter (IRestarter): Restarter module initialized. Will call restart() when the target is down. Default None
-        monitors (list of IMonitor): Monitor modules
     """
 
     def __init__(self,
                  restart_sleep_time: float = 5.0,
-                 fuzz_loggers: "list of FuzzLogger" = None,
                  target: Target = None,
                  restarter: IRestarter = None,
-                 monitors: "list of IMonitor" = [],
                  seed: int = 0,
                  fuzz_protocol: "IFuzzer" = None,
                  alpha: float = 0.0,
@@ -103,15 +97,6 @@ class Session(object):
         # Create Results Dir if it does not exist
         helpers.mkdir_safe(os.path.join(constants.RESULTS_DIR))
 
-        # Make default logger if no others set
-        if fuzz_loggers is None:
-            fuzz_loggers = [FuzzLoggerText()]
-
-        # Open session file if specified
-        # fuzz_loggers.append(FuzzLoggerText(file_handle=open(self.log_filename, 'a')))
-
-        self.logger = FuzzLogger(fuzz_loggers)
-        # self.logger = FuzzLogger()
         self.fuzz_protocol = fuzz_protocol
 
         self.target = target
@@ -119,20 +104,13 @@ class Session(object):
             try:
                 self.add_target(target)
             except exception.EPFRpcError as e:  # TODO: Change exception
-                self.logger.log_error(str(e))
                 raise
         self._requests = []
         self.graph = Graph()
 
-        self.suspects: Dict[int, TestCase or None] = {}  # Dictionary of suspect test cases
-        self.latest_tests = []  # List of N test cases
-        self.previous_test_possible = False
+        self.suspects = []
 
-        self._restarter = restarter
-
-        self.monitors = []
-        for monitor_class in monitors:
-            self.monitors.append(monitor_class(self))
+        self.restarter = restarter
 
         # Some variables that will be used during fuzzing
         self.time_budget = SessionClock(time_budget)
@@ -143,6 +121,7 @@ class Session(object):
         self.drain_seed_iterator = iter(self.active_population)
         self.active_individual = None
         self.active_testcase = None
+        self.previous_testcase = None
         self.drain_seed_individuals = False
 
         self.is_paused = False
@@ -152,7 +131,8 @@ class Session(object):
         self.energy_threshold = 0.05
         self.energy_periods = 0
         self.reheat_count = 0
-        self._restarter.restart()
+
+        # TODO: make sure binary is running
 
     # ================================================================#
     # Actions                                                         #
@@ -194,14 +174,9 @@ class Session(object):
     def evaluate_individual(self):
         # 1. create test case
         self.test_case_cnt += 1
+        self.previous_testcase = self.active_testcase
         self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
-        # 2. fuzz
-        # try:
         self.active_testcase.run()
-        # time.sleep(2.0)
-        if self.active_testcase.crashed:
-            # TODO: CRASH HANDLING
-            self._restarter.restart()
 
     def update_population(self):
         increase = self.active_testcase.coverage_increase
@@ -213,7 +188,6 @@ class Session(object):
 
     def update_bugs(self):
         pass
-        # print("TODO UPDATE_BUGS")
 
     def cont(self) -> bool:
         """
@@ -230,7 +204,6 @@ class Session(object):
         """
         self.time_budget.stop()
         if self.time_budget.exhausted:
-            self.logger.log_warn('Time budget exhausted!')
             self.is_paused = True
         result = not (self.time_budget.exhausted or self.is_paused)
         if result:
@@ -289,69 +262,19 @@ class Session(object):
     # Suspects, disabled elements                                     #
     # ================================================================#
 
-    def add_suspect(self, test_case: TestCase):
-        """
-        Adds a TestCase as a suspect if it was not added previously
-        Args:
-            test_case: The test case to add as a suspect
-        """
-        return
-        if test_case.id not in self.suspects:
-            self.suspects[test_case.id] = test_case
-            self.logger.log_info(f'Added test case {test_case.id} as a suspect')
+    def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
+        self.add_suspect(self.active_testcase, error, complications, exit_code)
 
-            # Check if crash threshold
-            request_crashes = {}
-            mutant_crashes = {}
-            # TODO: REQUEST WILL HAVE CHANGED WHEN CALLED THIS. FIX
-            for suspect in self.suspects.values():
-                if suspect is not None:
-                    request_name = suspect.request_name
-                    request_crashes[request_name] = request_crashes.get(request_name, 0) + 1
-                    if request_crashes[request_name] >= self.opts.crash_threshold_request:
-                        # Disable request! :o
-                        self.logger.log_fail(f'Crash threshold reached for request {request_name}. Disabling it')
-                        self.disable_by_path_name(request_name)
+    def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
+        if self.previous_testcase is None:
+            return
+        self.add_suspect(self.previous_testcase, error, complications, exit_code)
 
-                    mutant_name = suspect.mutant_name
-                    mutant_crashes[mutant_name] = mutant_crashes.get(mutant_name, 0) + 1
-                    if mutant_crashes[mutant_name] >= self.opts.crash_threshold_element:
-                        # Disable mutant! :o
-                        self.logger.log_fail(f'Crash threshold reached for mutant {request_name}.{mutant_name}. '
-                                             f'Disabling it')
-                        self.disable_by_path_name(f'{request_name}.{mutant_name}')
-
-    def add_last_case_as_suspect(self, error: Exception):
-        """
-        Adds the latest test executed as a suspect
-        Args:
-            error: An Exception to include within the TestCase information
-        """
-        if len(self.latest_tests) == 0 or self.previous_test_possible is False:
-            return  # No latest case to add
-        self.logger.log_warn("Adding latest test case as a suspect")
-        latest_test = self.latest_tests[0]
-        latest_test.add_error(error)
-        self.add_suspect(latest_test)
-        self.previous_test_possible = False
-
-    def restart_target(self):
-        """ It will call the restart() command of the IRestarter instance, if a restarter module was set"""
-        if self._restarter is not None:
-            try:
-                self.logger.open_test_step('Restarting Target')
-                restarter_info = self._restarter.restart()
-                self.logger.log_info(restarter_info)
-            except Exception as e:
-                pass
-                self.logger.log_fail(
-                   "The Restarter module {} threw an exception: {}".format(self._restarter.name(), e))
-
-    def check_monitors(self):
-        """ Check all monitors, and add the current test case as a suspect if a monitor returns False """
-        for monitor in self.monitors:
-            # The monitor run() function decides whether to add a test_case as suspect or not
-            monitor.run(self.test_case)
+    def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
+        testcase.add_error(error)
+        testcase.needed_restart = complications
+        testcase.exit_code = exit_code
+        self.suspects += [testcase]
 
     def add_target(self, target: Target):
         """
@@ -360,7 +283,6 @@ class Session(object):
         Args:
             target: Target to add to session
         """
-        target.set_fuzz_data_logger(fuzz_data_logger=self.logger)
 
         # add target to internal list.
         self.target = target

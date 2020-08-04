@@ -25,12 +25,12 @@ class TestCase(object):
         self.session = session
         self.individual = individual
 
-        self.logger = session.logger
-
         self.name = f"{self.id}.{self.individual.species.replace(' ', '_')}.{str(self.individual.identity)[-12:]}"
         self.errors = []
         self.coverage_increase = None
         self.crashed = False
+        self.needed_restart = False
+        self.exit_code = None
         self.individual.testcase = self
 
     def add_error(self, error):
@@ -49,54 +49,28 @@ class TestCase(object):
         Returns: True if the TestCase was run and data was transmitted (even if transmission was cut)
                  False if there was a connection issue and the target was paused, so the TestCase was not run
         """
+        # target has been run before
         if self.coverage_increase is not None:
             return False
+        # assert target is healthy
+        complications, retval = self.session.restarter.assert_healthy()
+        if complications:
+            # previous case crashed target!
+            self.session.add_last_case_as_suspect(Exception("target crashed"), complications, retval)
         try:
-            self.logger.open_test_case(f"{self.name}", name=self.name, index=self.id)
-
             self.open_fuzzing_target()
 
-            # TODO: TESTCASE INTEGRATION
-            # traverse_to_node()
-            # for idx, edge in enumerate(self.path, start=1):  # Now we go through our path, sending each request
-            #    request = edge.dst
-            #    callback = edge.callback
-
-            #    if request == self.request:
-            #       # This is the node we are fuzzing
-            #        if fuzz:
-            self.logger.open_test_step(f'Fuzzing individual {self.individual.identity}')
-            # callback_data = self._callback_current_node(node=request, edge=edge)
-            self.transmit(self.individual)  #, callback_data=callback_data)
-            #        else:
-            #            self.logger.open_test_step(f'Transmit node {request.name}')
-            #            callback_data = self._callback_current_node(node=request, edge=edge, original=True)
-            #            self.transmit(request, callback_data=callback_data, original=True)
-
-            #    else:
-            #        # This is a node we are not fuzzing right now
-            #        self.logger.open_test_step(f'Transmit node {request.name}')
-            #        callback_data = self._callback_current_node(node=request, edge=edge, original=True)
-            #        self.transmit(request, callback_data=callback_data, original=not fuzzed_sent)
-
-            #    if self.session.opts.new_connection_between_requests and len(self.path) > idx:  # Reopen connection
-            #        try:
-            #            self.session.target.close()
-            #            self.open_fuzzing_target(retry=False)
-            #        except (exception.EPFTargetConnectionFailedError, Exception) as e:
-            #            self.add_error(e)
-            #            self.session.add_suspect(self)
-            #            raise exception.EPFTestCaseAborted(str(e))
+            # TODO: state transition
+            self.transmit(self.individual)
             self.session.target.close()
             coverage_map = shm.get()
             self.coverage_increase = coverage_map.changed
             coverage_map.update_state()
-            self.crashed = not self.session._restarter.healthy()
+            self.crashed = not self.session.restarter.healthy()
             return True
         except exception.EPFPaused:
             return False  # Returns False when the fuzzer got paused, as it did not run the TestCase
         except exception.EPFTestCaseAborted as e:  # There was a transmission Error, we end the test case
-            self.logger.log_info(f'Test case aborted due to transmission error: {str(e)}')
             return True
 
     def open_fuzzing_target(self):
@@ -109,137 +83,43 @@ class TestCase(object):
 
         try:
             target.open()
-        except (exception.EPFTargetConnectionFailedError, Exception) as e:  # TimeoutError, socket.timeout
+        except (exception.EPFTargetConnectionFailedError, Exception):
             try:
-                self.logger.log_fail("Cannot connect to target; Retrying... ")
                 target.open()  # Second try, just in case we have a network error not caused by the fuzzer
-            except (exception.EPFTargetConnectionFailedError, Exception) as e:
-                self.logger.log_error("Cannot connect to target; target presumed down.")
-                self.session.add_last_case_as_suspect(e)
-                # raise
-                self.session.restart_target()  # Restart the target if a restarter was set
-                recovered = self.wait_until_target_recovered()  # Wait for target to recover
-                if recovered:
-                    self.open_fuzzing_target()
-                else:
-                    raise
+            except Exception as e:
+                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+                self.session.add_last_case_as_suspect(e, complications, retval)
 
-    def transmit(self, individual: Individual, callback_data: bytes = None, original: bool = False, receive=False):
+    def transmit(self, individual: Individual, receive=False):
         """
         Render and transmit a fuzzed node, process callbacks accordingly.
 
         Args:
             individual: Request that is being fuzzed
-            callback_data: callback data from a previous callback
-            original: if True, will send the original value and not render
             receive: if True, it will try to receive data after sending the request
 
         Returns: None
         Raises: EPFTestCaseAborted when a transmission error occurs
         """
-        # if callback_data:
-        #     data = callback_data
         data = individual.serialize()
 
         # 1. SEND DATA
         try:
             self.session.target.send(data)
-        except exception.EPFTargetConnectionReset as e:  # Connection was reset
-            self.logger.log_info("Target connection reset.")
-            condition = self.session.opts.ignore_transmission_errors if original \
-                else self.session.opts.ignore_connection_issues_after_fuzz
-            if not condition:
-                self.add_error(e)
-                self.session.add_suspect(self)
-            raise exception.EPFTestCaseAborted(str(e))  # Abort TestCase, Connection Reset
-        except exception.EPFTargetConnectionAborted as e:
-            msg = f"Target connection lost (socket error: {e.socket_errno} {e.socket_errmsg})"
-            condition = self.session.opts.ignore_transmission_errors if original \
-                else self.session.opts.ignore_connection_issues_after_fuzz
-            if condition:
-                pass
-                self.logger.log_info(msg)
-            else:
-                self.logger.log_fail(msg)
-                self.add_error(e)
-                self.session.add_suspect(self)
-                raise exception.EPFTestCaseAborted(str(e))  # Abort TestCase, Connection Failed
+        except Exception as e:
+            complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+            self.session.add_current_case_as_suspect(e, complications, retval)
+            return
 
         # 2. RECEIVE DATA
         if receive:
             try:
-                receive_failed = False
-                error = ''
                 last_recv = self.session.target.recv(DEFAULT_MAX_RECV)
-                if not last_recv:  # Nothing received, probably conn reset
-                    receive_failed = True
-                    error = "Nothing received. Connection Reset?"
-                    # raise exception.EPFTestCaseAborted("Receive failed. Aborting Test Case")
-                # TODO: Responses
-                # elif len(request.responses) > 0:  # Data received, Responses defined
-                #     try:
-                #         self.logger.log_check("Parsing response with data received")
-                #         response_str = request.parse_response(self.last_recv)
-                #         self.logger.log_info(response_str)
-                #         receive_failed = False
-                #     except exception.EPFRuntimeError as e:  # Data received, Response do not match
-                #         self.logger.log_fail(str(e))  # Abort TestCase
-                #         receive_failed = False
-                #         raise exception.EPFTestCaseAborted(str(e))
-                #     except Exception as e:  # Any other exception not controlled by the Restarter module
-                #         self.logger.log_fail(str(e))
-                #         self.session.is_paused = True  # Pause the session if an uncontrolled error occurs
-                #         raise exception.EPFTestCaseAborted(str(e))
-                else:  # Data received, no Responses defined
-                    receive_failed = False
-
-                self.logger.log_check("Checking data received...")
-                if receive_failed:
-                    # Assume a crash?
-                    self.logger.log_fail(f"Nothing received from target. {error}")
-                    self.session.add_suspect(self)
-                    raise exception.EPFTestCaseAborted("Receive failed. Aborting Test Case")
-
-            except exception.EPFTargetConnectionReset as e:  # Connection reset
-                self.logger.log_fail("Target connection reset.")
-                self.add_error(e)
-                self.session.add_suspect(self)
-                raise exception.EPFTestCaseAborted(str(e))
-            except exception.EPFTargetConnectionAborted as e:
-                msg = f"Target connection lost (socket error: {e.socket_errno} {e.socket_errmsg})"
-                self.logger.log_fail(msg)
-                self.add_error(e)
-                self.session.add_suspect(self)
-                raise exception.EPFTestCaseAborted(str(e))
-
-    # --------------------------------------------------------------- #
-
-    def wait_until_target_recovered(self):
-        """
-        Returns: bool indicating if the target has recovered (False happens if the session is paused before that)
-        """
-        # When the connection fails, we want to pause the fuzzer, save the packets,etc
-        recovered = False
-        if self.session.is_paused:
-            raise exception.EPFPaused('Paused while waiting for recovery')
-        self.logger.open_test_step('Waiting for target recovery')
-        while not recovered:
-            if self.session.is_paused:
-                raise exception.EPFPaused('Paused while waiting for recovery')
-            self.logger.log_info(f"Target seems down. Sleeping for {self.session.opts.restart_sleep_time} seconds")
-            time.sleep(self.session.opts.restart_sleep_time)
-            try:
-                self.session.target.open()
-                self.logger.log_info("Target recovered! Continuing fuzzing")
-                recovered = True
-            except exception.EPFTargetConnectionFailedError:
-                pass
-                self.logger.log_info("Target still down")
+                if not last_recv:
+                    raise Exception("empty response after send")
             except Exception as e:
-                pass
-                self.logger.log_info("Target still down")
-                self.logger.log_info("Exception {}: {}".format(type(e).__name__, str(e)))
-        return recovered
+                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+                self.session.add_current_case_as_suspect(e, complications, retval)
 
     # --------------------------------------------------------------- #
 
@@ -266,7 +146,7 @@ class TestCase(object):
     # --------------------------------------------------------------- #
 
     def __repr__(self):
-        return '<%s %s>' % (self.__class__.__name__, self.id)
+        return f'{vars(self)}'
 
     def info(self):
         """Returns information about the test case"""
@@ -275,21 +155,3 @@ class TestCase(object):
         #        f'  Mutant: {self.mutant_name}\n' \
         #        f'  Errors: {self.errors}'
         # f'  Path: {self.path_name}\n' \
-
-    def _callback_current_node(self, node, edge, original=False):
-        """Execute callback preceding current node.
-
-        Returns:
-            bytes: Data rendered by current node if any; otherwise None.
-            :type original: object
-        """
-        return None
-        # data = None
-
-        # # if the edge has a callback, process it. the callback has the option to render the node, modify it and return.
-        # if edge.callback:
-        #     self.logger.open_test_step('Callback function')
-        #     data = edge.callback(self.session.target, self.logger, session=self, node=node, edge=edge,
-        #                          original=original)
-
-        # return data

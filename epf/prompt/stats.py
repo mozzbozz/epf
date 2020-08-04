@@ -6,6 +6,7 @@ from epf import shm, constants
 
 class Stats(npyscreen.NPSAppManaged):
     session = None
+
     def onStart(self):
         self.keypress_timeout_default = 10
         self.addForm("MAIN", MainForm, name="Evolutionary Protocol Fuzzer", lines=33, columns=106)
@@ -52,17 +53,17 @@ class MainForm(npyscreen.FormBaseNew):
                              f'Iterations per sec: {its_per_sec} [#/sec]\n' + \
                              f'Iterations total:   {s.test_case_cnt} [#]\n' + \
                              f'Random seed:        {s.opts.seed}\n' + \
-                             f'Suspects found:     {0} [#]'
-        self.target.value = f'Command:        {s._restarter._cmd}\n' + \
-                            f'PID:            {s._restarter._pid}\n' + \
-                            f'Protocol:       {s.target._target_connection.proto}\n' + \
-                            f'Connection:     {s.target._target_connection.host}:{s.target._target_connection.port}\n' + \
+                             f'Suspects found:     {len(s.suspects)} [#]'
+        self.target.value = f'Command:        {s.restarter.cmd}\n' + \
+                            f'PID:            {s.restarter.process.pid if s.restarter.process is not None else "-"}\n' + \
+                            f'Protocol:       {s.target.target_connection.proto}\n' + \
+                            f'Connection:     {s.target.target_connection.host}:{s.target.target_connection.port}\n' + \
                             f'Send timeout:   {s.opts.send_timeout} [sec]\n' + \
                             f'Recv timeout:   {s.opts.recv_timeout} [sec]\n' + \
-                            f'Restarts:       {s._restarter.restarts} [#]\n' + \
-                            f'Timeouts:       {s.target._target_connection.recv_timeout_count + s.target._target_connection.send_timeout_count} [#]\n' + \
-                            f'Conn Errors:    {s.target._target_connection.conn_errors} [#]\n' + \
-                            f'Crashes:        {s._restarter.crashes} [#]\n'
+                            f'Restarts:       {s.restarter.restarts} [#]\n' + \
+                            f'Timeouts:       {s.target.target_connection.recv_timeout_count + s.target.target_connection.send_timeout_count} [#]\n' + \
+                            f'Conn Errors:    {s.target.target_connection.conn_errors} [#]\n' + \
+                            f'Crashes:        {s.restarter.crashes} [#]\n'
         mem = shm.get()
         uniq, _ = mem.directed_branch_coverage()
         self.instrumentation.value = f'Shared MMAP ID: {mem.name}\n' + \
@@ -87,14 +88,14 @@ class MainForm(npyscreen.FormBaseNew):
         head = s.active_population._pop[:3]
         tail = s.active_population._pop[-3:]
         self.insight.value = 'Highest priority individuals:\n' + \
-                             f'      [0]  {head[0].identity}\n' + \
-                             f'      [1]  {head[1].identity}\n' + \
-                             f'      [2]  {head[2].identity}\n' + \
+                             f'      [0]  {head[0].identity if len(head) > 0 else "-"}\n' + \
+                             f'      [1]  {head[1].identity if len(head) > 1 else "-"}\n' + \
+                             f'      [2]  {head[2].identity if len(head) > 2 else "-"}\n' + \
                              '             ... \n' + \
                              'Lowest priority individuals:\n' + \
-                             f'     [n-3] {tail[0].identity}\n' + \
-                             f'     [n-2] {tail[1].identity}\n' + \
-                             f'     [n-1] {tail[2].identity}'
+                             f'     [n-3] {tail[0].identity if len(head) > 0 else "-"}\n' + \
+                             f'     [n-2] {tail[1].identity if len(head) > 1 else "-"}\n' + \
+                             f'     [n-1] {tail[2].identity if len(head) > 2 else "-"}'
         self.display()
 
 

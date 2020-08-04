@@ -14,12 +14,10 @@ Licensed under GNU General Public License v2.0 - See LICENSE.txt
 from epf.helpers import deprecated
 from . import exception
 from .constants import BIG_ENDIAN, LITTLE_ENDIAN
-from .loggers.fuzz_logger import FuzzLogger
 from .connections import ITargetConnection
 from .exception import EPFRuntimeError, SizerNotUtilizedError, MustImplementException
 from .connections import SocketConnection
 from .connections.target import Target
-from .loggers import IFuzzLogger
 from .session import Session
 from .responses import *
 __version__ = '0.8.2'
