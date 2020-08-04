@@ -126,7 +126,7 @@ class SessionPrompt(CommandPrompt):
     def handle_exit(self, tokens: list) -> None:
         if len(tokens) > 0:
             if tokens[0] in ('exit', 'quit', 'q'):
-                self.session.restarter.kill()
+                self.exit_message()
                 sys.exit(0)
 
     # --------------------------------------------------------------- #
@@ -249,6 +249,8 @@ class SessionPrompt(CommandPrompt):
 
     def exit_message(self):
         self.session.restarter.kill()
+        self.session.bugs_csv.flush()
+        self.session.bugs_csv.close()
         print_formatted_text(HTML('<b>Exiting prompt...</b>'))
 
     # --------------------------------------------------------------- #

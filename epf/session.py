@@ -1,3 +1,5 @@
+import csv
+import json
 import os
 import time
 from numpy import random
@@ -5,6 +7,7 @@ from numpy import random
 from epf import Target, exception
 from epf.restarters import IRestarter
 from . import helpers
+from . import shm
 from . import constants
 from epf.graph import Graph
 from typing import Dict, Any
@@ -94,8 +97,6 @@ class Session(object):
             time_budget=time_budget
         )
 
-        # Create Results Dir if it does not exist
-        helpers.mkdir_safe(os.path.join(constants.RESULTS_DIR))
 
         self.fuzz_protocol = fuzz_protocol
 
@@ -132,11 +133,69 @@ class Session(object):
         self.energy_periods = 0
         self.reheat_count = 0
 
-        # TODO: make sure binary is running
+        # Create Results Dir if it does not exist
+        self.result_dir = os.path.join('epf-results', f'{int(time.time())}')
+        self.transition_payload_dir = os.path.join(self.result_dir, 'transition_payloads')
+        helpers.mkdir_safe(self.result_dir)
+        helpers.mkdir_safe(self.transition_payload_dir)
+        self.write_run_json()
+        for p in iter(sorted(self.populations.keys())):
+            helpers.mkdir_safe(os.path.join(self.transition_payload_dir, p))
+        # TODO: self.write_transition_payloads()
+        self.bugs_csv = None
+        self.bugs_csv_writer = None
+        self.prepare_bugs_csv()
 
-    # ================================================================#
-    # Actions                                                         #
-    # ================================================================#
+    def write_run_json(self):
+        json_file = os.path.join(self.result_dir, "run.json")
+        mem = shm.get()
+        data = {
+            "general": {
+                "fuzzer": self.fuzz_protocol.name,
+                "time_budget": self.time_budget.budget,
+                "random_seed": self.opts.seed,
+            },
+            "target": {
+                "exec_command": self.restarter.cmd,
+                "protocol": self.target.target_connection.proto,
+                "connection": f'{self.target.target_connection.host}:{self.target.target_connection.port}',
+                "send_timeout": self.opts.send_timeout,
+                "recv_timeout": self.opts.recv_timeout,
+            },
+            "instrumentation": {
+                "mmap_id": mem.name,
+                "injection_env": constants.INSTR_AFL_ENV,
+                "mem_size": mem.size / 1024,
+            },
+            "genetics": {
+                "populations": {
+                    "seed": self.opts.pcap,
+                    "count": len(self.populations),
+                    "population_names": [p for p in iter(sorted(self.populations.keys()))],
+                    "population_sizes": [len(self.populations[p]) for p in iter(sorted(self.populations.keys()))],
+                    "population_limit": self.opts.population_limit,
+                },
+                "simulated_annealing": {
+                    "cooldown_alpha": self.opts.alpha,
+                    "reheat_beta": self.opts.beta,
+                    "spot_mutation_probability": self.active_population._p_mutation,
+                },
+            },
+        }
+        with open(json_file, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def prepare_bugs_csv(self):
+        b_file = os.path.join(self.result_dir, 'bugs.csv')
+        self.bugs_csv = open(b_file, "w")
+        header = [1,"2",3]
+        self.bugs_csv_writer = csv.DictWriter(self.bugs_csv, fieldnames=header)
+        self.bugs_csv_writer.writeheader()
+        self.bugs_csv.flush()
+        #writer.writerow({'first_name': 'Baked', 'last_name': 'Beans'})
+        #writer.writerow({'first_name': 'Lovely', 'last_name': 'Spam'})
+        #writer.writerow({'first_name': 'Wonderful', 'last_name': 'Spam'})
+
 
     def cooldown(self) -> float:
         self.energy *= self.opts.alpha
@@ -187,6 +246,7 @@ class Session(object):
         self.active_population.shrink(self.opts.population_limit)
 
     def update_bugs(self):
+        # TODO: CSV
         pass
 
     def cont(self) -> bool:

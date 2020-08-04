@@ -1,8 +1,6 @@
 BIG_ENDIAN = ">"
 LITTLE_ENDIAN = "<"
 
-RESULTS_DIR = 'epf-results'
-
 ERR_CONN_FAILED_TERMINAL = "Cannot connect to target; target presumed down. Stopping test run. Note: This likely " \
                            "indicates a failure caused by the previous test case. "
 

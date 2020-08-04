@@ -44,6 +44,7 @@ class MainForm(npyscreen.FormBaseNew):
 
     def while_waiting(self):
         s = self.parentApp.session
+        self.name = f'Evolutionary Protocol Fuzzer (run directory: {s.result_dir})'
         if s.active_individual is None:
             return
         its_per_sec = s.test_case_cnt - self.prev_iterations
