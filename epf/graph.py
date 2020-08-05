@@ -1,4 +1,6 @@
 # from typing import Dict, List, Any, Generator
+from typing import Any, Generator
+
 import networkx as nx
 import matplotlib.pyplot as plt
 from networkx.drawing.nx_agraph import graphviz_layout
@@ -19,7 +21,7 @@ class Graph(object):
         # nx.draw(self.g, with_labels=True)
         plt.show()
 
-    def connect(self, src: object, dst=None, callback=None):
+    def connect(self, src: Any, dst: Any = None):
         if dst is not None and not self.g.has_node(dst):
             self.g.add_node(dst)
         if not self.g.has_node(src):
@@ -28,17 +30,8 @@ class Graph(object):
             dst = src
             src = '_root_'
         if not self.g.has_edge(src, dst):
-            self.g.add_edge(src, dst, callback=callback)
+            self.g.add_edge(src, dst)
 
-    # def fuzzable_iterator(self) -> Generator[Mutant, None, None]:
-    #     for mutant in self.g:
-    #         if mutant == self.root:
-    #             continue
-    #         if mutant.fuzzable:
-    #             yield mutant
-
-    # def path_to_fuzzable_iterator(self, fuzzable: Mutant):
-    #     for n in nx.shortest_path(self.g, source=self.root, target=fuzzable)[1:]:
-    #         if n == self.root or n == fuzzable:
-    #             continue
-    #         yield n
+    def traverse_from_to(self, from_node: Any, to_node: Any) -> Generator[Any, None, None]:
+        for n in nx.shortest_path(self.g, source=from_node, target=to_node)[1:]:
+            yield n

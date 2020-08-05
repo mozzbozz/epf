@@ -8,6 +8,8 @@ from numpy import random, uint64, iinfo
 import random as stdrandom
 from uuid import UUID
 
+from .transition_payload import TransitionGraph
+
 
 class Chromosome(object):
     def __init__(self, individual: "Individual", field: Field, packet: Packet):
@@ -131,9 +133,14 @@ class Population(object):
         self._pop = []
         self.crossovers = 0
         self.spot_mutations = 0
+        self.recv_after_send = False
+        self._stateg = TransitionGraph(self)
+
+    @property
+    def state_graph(self) -> TransitionGraph:
+        return self._stateg
 
     def update(self, child: Individual, heat: float = 1.0, add: bool = False):
-        # TODO: CRASHED
         identical = any(o.identical(child) for o in self._pop)
         if identical:
             return

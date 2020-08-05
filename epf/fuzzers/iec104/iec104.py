@@ -2,6 +2,7 @@ from typing import Union, Dict
 
 from epf.fuzzers.ifuzzer import IFuzzer
 from epf import Session
+from epf.transition_payload import TransitionPayload
 from epf.chromo import Population, Crossover
 from scapy.contrib.scada.iec104 import IEC104_APDU_CLASSES
 from scapy.packet import Packet
@@ -38,24 +39,23 @@ class IEC104(IFuzzer):
             population_crossover_operator=Crossover.single_point,
             population_mutation_probability=0.8,
         )
-#        # ESTABLISH CONNECTION NOFUZZ
-#        s_initialize("connect_nofuzz")
-#        s_static(b'\x68\x04\x07\x00\x00\x00')
-#
-#        s_initialize("disconnect_nofuzz")
-#        s_static(b'\x68\x04\x07\x00\x00\x00')
-#        s_initialize("iec104_sframe")
-#        with s_block("iec104_apci"):
-#            s_byte(0x68, name='APCI_START', fuzzable=False)
-#            s_byte(0x00, name="APCI_LENGTH", fuzzable=True)  # LATER
-#            s_byte(0b00000011, name="APCI_OCTET1", fuzzable=False)  # LATER
-#            s_byte(0b00000000, name="APCI_OCTET2", fuzzable=True)
-#            s_byte(0b00000000, name="APCI_OCTET3", fuzzable=True)
-#            s_byte(0b00000000, name="APCI_OCTET4", fuzzable=True)
-
-
-#     @staticmethod
-#     def sframe(session: Session) -> None:
-#         pass
-#         # session.connect(s_get('connect_nofuzz'))
-#         # session.connect(s_get('connect_nofuzz'), s_get('iec104_sframe'))
+        testfr = TransitionPayload(name="testfr", payload=b'\x68\x04\x43\x00\x00\x00', recv_after_send=True)
+        startdt = TransitionPayload(name="startdt", payload=b'\x68\x04\x07\x00\x00\x00', recv_after_send=True)
+        stopdt = TransitionPayload(name="stopdt", payload=b'\x68\x04\x13\x00\x00\x00', recv_after_send=False)
+        # <-- in case we want to receive after sending an individual of a specific population
+        for species, pop in IEC104.populations.items():
+            if species == 'population_that_requires_receive':
+                pop.recv_after_send = True
+            if species != 'IEC-104 U APDU':
+                pop.state_graph.pre(testfr)
+                pop.state_graph.pre(startdt)
+                pop.state_graph.finalize_pre()
+                pop.state_graph.post(stopdt)
+                pop.state_graph.finalize_post()
+                print(f'{species}:')
+                print("pre")
+                for payload in pop.state_graph.traverse_pre_phase():
+                    print(payload.name)
+                print("post")
+                for payload in pop.state_graph.traverse_post_phase():
+                    print(payload.name)

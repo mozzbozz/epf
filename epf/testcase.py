@@ -28,7 +28,6 @@ class TestCase(object):
         self.name = f"{self.id}.{self.individual.species.replace(' ', '_')}.{str(self.individual.identity)[-12:]}"
         self.errors = []
         self.coverage_increase = None
-        self.crashed = False
         self.needed_restart = False
         self.exit_code = None
         self.individual.testcase = self
@@ -56,17 +55,22 @@ class TestCase(object):
         complications, retval = self.session.restarter.assert_healthy()
         if complications:
             # previous case crashed target!
-            self.session.add_last_case_as_suspect(Exception("target crashed"), complications, retval)
+            self.session.add_last_case_as_suspect(Exception("process_exit"), complications, retval)
         try:
             self.open_fuzzing_target()
-
-            # TODO: state transition
-            self.transmit(self.individual)
+            population = self.session.populations[self.individual.species]
+            # process pre-phase of population for state transitions
+            for pre in population.state_graph.traverse_pre_phase():
+                self.transmit(pre.bytes, receive=pre.recv_after_send)
+            # fuzz individual
+            self.transmit(self.individual.serialize(), receive=population.recv_after_send)
+            # process post-phase of population for state transitions
+            for post in population.state_graph.traverse_post_phase():
+                self.transmit(post.bytes, receive=post.recv_after_send, relax=self.session.opts.post_relax)
             self.session.target.close()
             coverage_map = shm.get()
             self.coverage_increase = coverage_map.changed
             coverage_map.update_state()
-            self.crashed = not self.session.restarter.healthy()
             return True
         except exception.EPFPaused:
             return False  # Returns False when the fuzzer got paused, as it did not run the TestCase
@@ -90,25 +94,25 @@ class TestCase(object):
                 complications, retval = self.session.restarter.assert_healthy(force_kill=True)
                 self.session.add_last_case_as_suspect(e, complications, retval)
 
-    def transmit(self, individual: Individual, receive=False):
+    def transmit(self, data: bytes, receive=False, relax=False):
         """
         Render and transmit a fuzzed node, process callbacks accordingly.
 
         Args:
-            individual: Request that is being fuzzed
+            data: bytes
             receive: if True, it will try to receive data after sending the request
 
         Returns: None
         Raises: EPFTestCaseAborted when a transmission error occurs
         """
-        data = individual.serialize()
 
         # 1. SEND DATA
         try:
             self.session.target.send(data)
         except Exception as e:
-            complications, retval = self.session.restarter.assert_healthy(force_kill=True)
-            self.session.add_current_case_as_suspect(e, complications, retval)
+            if not relax:
+                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+                self.session.add_current_case_as_suspect(e, complications, retval)
             return
 
         # 2. RECEIVE DATA
@@ -118,8 +122,9 @@ class TestCase(object):
                 if not last_recv:
                     raise Exception("empty response after send")
             except Exception as e:
-                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
-                self.session.add_current_case_as_suspect(e, complications, retval)
+                if not relax:
+                    complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+                    self.session.add_current_case_as_suspect(e, complications, retval)
 
     # --------------------------------------------------------------- #
 

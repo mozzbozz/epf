@@ -11,10 +11,10 @@ import argparse
 from numpy import random
 import random as stdrandom
 
-from epf import Target, SocketConnection
-from epf.fuzzers import IFuzzer
-from epf.restarters import IRestarter
-from epf.session import Session
+from . import Target, SocketConnection
+from .fuzzers import IFuzzer
+from .restarters import IRestarter
+from .session import Session
 
 logo = """
 `-:-.   ,-;"`-:-.   ,-;"`-:-.   ,-;"`-:-.   ,-;"

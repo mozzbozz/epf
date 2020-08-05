@@ -78,7 +78,8 @@ class Session(object):
                  alpha: float = 0.0,
                  beta: float = 0.0,
                  population_limit: int = 10000,
-                 time_budget: float = 0.0
+                 time_budget: float = 0.0,
+                 post_relax: bool = True,
                  ):
         super().__init__()
 
@@ -94,7 +95,8 @@ class Session(object):
             alpha=alpha,
             beta=beta,
             population_limit=population_limit,
-            time_budget=time_budget
+            time_budget=time_budget,
+            post_relax=post_relax
         )
 
 
@@ -136,15 +138,18 @@ class Session(object):
         # Create Results Dir if it does not exist
         self.result_dir = os.path.join('epf-results', f'{int(time.time())}')
         self.transition_payload_dir = os.path.join(self.result_dir, 'transition_payloads')
+        self.bug_payload_dir = os.path.join(self.result_dir, 'bug_payloads')
         helpers.mkdir_safe(self.result_dir)
         helpers.mkdir_safe(self.transition_payload_dir)
         self.write_run_json()
         for p in iter(sorted(self.populations.keys())):
             helpers.mkdir_safe(os.path.join(self.transition_payload_dir, p))
+            helpers.mkdir_safe(os.path.join(self.bug_payload_dir, p))
         # TODO: self.write_transition_payloads()
         self.bugs_csv = None
         self.bugs_csv_writer = None
         self.prepare_bugs_csv()
+        self.update_bug_db = False
 
     def write_run_json(self):
         json_file = os.path.join(self.result_dir, "run.json")
@@ -188,14 +193,25 @@ class Session(object):
     def prepare_bugs_csv(self):
         b_file = os.path.join(self.result_dir, 'bugs.csv')
         self.bugs_csv = open(b_file, "w")
-        header = [1,"2",3]
+        header = [
+            "bug_id",
+            "timestamp",
+            "iteration",
+            "test_id",
+            "individual",
+            "increased_coverage",
+            "caused_restart",
+            "cause_of_restart",
+            "exit_code",
+            "reported_coverage",
+            "population",
+            "population_size",
+            "energy",
+            "energy_period"
+        ]
         self.bugs_csv_writer = csv.DictWriter(self.bugs_csv, fieldnames=header)
         self.bugs_csv_writer.writeheader()
         self.bugs_csv.flush()
-        #writer.writerow({'first_name': 'Baked', 'last_name': 'Beans'})
-        #writer.writerow({'first_name': 'Lovely', 'last_name': 'Spam'})
-        #writer.writerow({'first_name': 'Wonderful', 'last_name': 'Spam'})
-
 
     def cooldown(self) -> float:
         self.energy *= self.opts.alpha
@@ -246,8 +262,32 @@ class Session(object):
         self.active_population.shrink(self.opts.population_limit)
 
     def update_bugs(self):
-        # TODO: CSV
-        pass
+        if not self.update_bug_db:
+            return
+        suspect: TestCase = self.suspects[-1]
+        mem = shm.get()
+        row = {
+            "bug_id": len(self.suspects),
+            "timestamp": round(self.time_budget.execution_time, 2),
+            "iteration": self.test_case_cnt,
+            "test_id": suspect.name,
+            "individual": suspect.individual.identity,
+            "increased_coverage": suspect.coverage_increase,
+            "caused_restart": suspect.needed_restart,
+            "cause_of_restart": str(suspect.errors[-1]),
+            "exit_code": suspect.exit_code,
+            "reported_coverage": mem.directed_branch_coverage()[0],
+            "population": suspect.individual.species,
+            "population_size": len(self.populations[suspect.individual.species]),
+            "energy": self.energy,
+            "energy_period": self.energy_periods
+        }
+        self.bugs_csv_writer.writerow(row)
+        self.bugs_csv.flush()
+        with open(os.path.join(self.bug_payload_dir, suspect.individual.species, str(suspect.individual.identity)), "wb") as f:
+            f.write(suspect.individual.serialize())
+            f.flush()
+        self.update_bug_db = False
 
     def cont(self) -> bool:
         """
@@ -324,11 +364,13 @@ class Session(object):
 
     def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         self.add_suspect(self.active_testcase, error, complications, exit_code)
+        self.update_bug_db = True
 
     def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         if self.previous_testcase is None:
             return
         self.add_suspect(self.previous_testcase, error, complications, exit_code)
+        self.update_bug_db = True
 
     def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
         testcase.add_error(error)
