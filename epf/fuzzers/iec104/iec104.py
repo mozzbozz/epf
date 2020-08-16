@@ -52,10 +52,7 @@ class IEC104(IFuzzer):
                 pop.state_graph.finalize_pre()
                 pop.state_graph.post(stopdt)
                 pop.state_graph.finalize_post()
-                print(f'{species}:')
-                print("pre")
-                for payload in pop.state_graph.traverse_pre_phase():
-                    print(payload.name)
-                print("post")
-                for payload in pop.state_graph.traverse_post_phase():
-                    print(payload.name)
+            else:
+                pop.state_graph.finalize_pre()
+                pop.state_graph.finalize_post()
+

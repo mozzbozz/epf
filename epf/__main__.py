@@ -54,6 +54,7 @@ class EPF(object):
             alpha=self.args.alpha,
             beta=self.args.beta,
             population_limit=self.args.plimit,
+            debug=self.args.debug,
         )
 
     # --------------------------------------------------------------- #
@@ -83,6 +84,7 @@ class EPF(object):
         fuzz_grp = self.parser.add_argument_group('Fuzzer options')
         fuzz_grp.add_argument("--fuzzer", dest="fuzz_protocol", help='application layer fuzzer', required=True,
                               choices=fuzzers)
+        fuzz_grp.add_argument('--debug', action='store_true', help='enable debug.csv')
         fuzz_grp.add_argument('--pcap', dest='pcap', type=str, required=True, help='pcap population seed')
         fuzz_grp.add_argument('--seed', dest='seed', type=int, default=0, help='prng seed')
         fuzz_grp.add_argument('--alpha', dest='alpha', type=float, default=0.995, help='simulated annealing cooldown parameter')

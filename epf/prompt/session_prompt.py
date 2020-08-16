@@ -73,10 +73,10 @@ class SessionPrompt(CommandPrompt):
                         '<filepath>',
                 'exec': self._cmd_idumpmem
             },
-            'energy': {
-                'desc': 'Energy Plotting',
-                'exec': self._cmd_energy
-            },
+            # 'energy': {
+            #     'desc': 'Energy Plotting',
+            #     'exec': self._cmd_energy
+            # },
         })
         return commands
 
@@ -251,6 +251,9 @@ class SessionPrompt(CommandPrompt):
         self.session.restarter.kill()
         self.session.bugs_csv.flush()
         self.session.bugs_csv.close()
+        if self.session.opts.debug:
+            self.session.debug_csv.flush()
+            self.session.debug_csv.close()
         print_formatted_text(HTML('<b>Exiting prompt...</b>'))
 
     # --------------------------------------------------------------- #
@@ -307,13 +310,4 @@ class SessionPrompt(CommandPrompt):
         except IOError as io:
             self._print_error(io)
 
-    # --------------------------------------------------------------- #
-
-    def _cmd_energy(self, tokens):
-        """
-        Calculate a branch report based on the AFL instrumentation.
-        :param tokens: ignored
-        :return: None
-        """
-        plt.plot(self.session.energy_hist)
-        plt.show()
+    # ---------------------------------------------------------------

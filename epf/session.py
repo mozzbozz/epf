@@ -80,6 +80,7 @@ class Session(object):
                  population_limit: int = 10000,
                  time_budget: float = 0.0,
                  post_relax: bool = True,
+                 debug: bool = False,
                  ):
         super().__init__()
 
@@ -96,7 +97,8 @@ class Session(object):
             beta=beta,
             population_limit=population_limit,
             time_budget=time_budget,
-            post_relax=post_relax
+            post_relax=post_relax,
+            debug=debug
         )
 
 
@@ -130,7 +132,6 @@ class Session(object):
         self.is_paused = False
         self.prompt = None
         self.energy = 1.0
-        self.energy_hist = []
         self.energy_threshold = 0.05
         self.energy_periods = 0
         self.reheat_count = 0
@@ -145,10 +146,14 @@ class Session(object):
         for p in iter(sorted(self.populations.keys())):
             helpers.mkdir_safe(os.path.join(self.transition_payload_dir, p))
             helpers.mkdir_safe(os.path.join(self.bug_payload_dir, p))
-        # TODO: self.write_transition_payloads()
         self.bugs_csv = None
         self.bugs_csv_writer = None
+        self.debug_csv = None
+        self.debug_csv_writer = None
         self.prepare_bugs_csv()
+        self.opts.debug = debug
+        if self.opts.debug:
+            self.prepare_debug_csv()
         self.update_bug_db = False
 
     def write_run_json(self):
@@ -212,6 +217,28 @@ class Session(object):
         self.bugs_csv_writer = csv.DictWriter(self.bugs_csv, fieldnames=header)
         self.bugs_csv_writer.writeheader()
         self.bugs_csv.flush()
+
+    def prepare_debug_csv(self):
+        d_file = os.path.join(self.result_dir, 'debug.csv')
+        self.debug_csv = open(d_file, "w")
+        header = [
+            "timestamp",
+            "iteration",
+            "test_id",
+            "individual",
+            "increased_coverage",
+            "caused_restart",
+            "cause_of_restart",
+            "exit_code",
+            "reported_coverage",
+            "population",
+            "population_size",
+            "energy",
+            "energy_period"
+        ]
+        self.debug_csv_writer = csv.DictWriter(self.debug_csv, fieldnames=header)
+        self.debug_csv_writer.writeheader()
+        self.debug_csv.flush()
 
     def cooldown(self) -> float:
         self.energy *= self.opts.alpha
@@ -289,6 +316,29 @@ class Session(object):
             f.flush()
         self.update_bug_db = False
 
+    def debug(self):
+        if not self.opts.debug:
+            return
+        tc: TestCase = self.active_testcase
+        mem = shm.get()
+        row = {
+            "timestamp": round(self.time_budget.execution_time, 2),
+            "iteration": self.test_case_cnt,
+            "test_id": tc.name,
+            "individual": tc.individual.identity,
+            "increased_coverage": tc.coverage_increase,
+            "caused_restart": tc.needed_restart,
+            "cause_of_restart": str(tc.errors[-1]) if len(tc.errors) != 0 else "-",
+            "exit_code": tc.exit_code if len(tc.errors) != 0 else 0,
+            "reported_coverage": mem.directed_branch_coverage()[0],
+            "population": tc.individual.species,
+            "population_size": len(self.populations[tc.individual.species]),
+            "energy": self.energy,
+            "energy_period": self.energy_periods
+        }
+        self.debug_csv_writer.writerow(row)
+        self.debug_csv.flush()
+
     def cont(self) -> bool:
         """
         Cont outputs a boolean indicating whether a new fuzz iteration should be processed.
@@ -308,7 +358,6 @@ class Session(object):
         result = not (self.time_budget.exhausted or self.is_paused)
         if result:
             self.time_budget.start()
-        self.energy_hist += [self.energy]
         return result
 
     def drain(self):
@@ -327,6 +376,7 @@ class Session(object):
             _ = self.active_testcase.coverage_increase
             self.evaluate_individual()
             self.update_bugs()
+            self.debug()
 
     def run_all(self):
         if self.drain_seed_individuals:
@@ -337,6 +387,7 @@ class Session(object):
             self.evaluate_individual()      #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
             self.update_population()        #   C <- CONFUPDATE(C', conf, execinfos)
             self.update_bugs()              #   B <- B u B'
+            self.debug()
 
     # ================================================================#
     # Graph related functions                                         #
