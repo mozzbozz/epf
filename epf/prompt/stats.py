@@ -66,12 +66,12 @@ class MainForm(npyscreen.FormBaseNew):
                             f'Conn Errors:    {s.target.target_connection.conn_errors} [#]\n' + \
                             f'Crashes:        {s.restarter.crashes} [#]\n'
         mem = shm.get()
-        uniq, _ = mem.directed_branch_coverage()
+        uniq = s.previous_testcase.coverage_snapshot if s.previous_testcase is not None else 0
         self.instrumentation.value = f'Shared MMAP ID: {mem.name}\n' + \
                                      f'Injection ENV:  {constants.INSTR_AFL_ENV}\n' + \
-                                     f'Memory size:    {mem.size / 1024} [kiB]\n' + \
-                                     f'Reported cov.:  {uniq} [# block transitions]\n' + \
-                                     f'Last cov. inc.: {round(time.time() - mem.tstamp, 2)} [sec]'
+                                     f'Memory size:    {mem.size / 1024} [KiB]\n' + \
+                                     f'Reported cov.:  {uniq} [# trace bytes]\n' + \
+                                     f'Last cov. inc.: {round(time.time() - s.t_last_increase, 2)} [sec]'
         self.genetics.value = f'Population seed:  {s.opts.pcap}\n' + \
                               f'Populations:      {len(s.populations)} [#]\n' + \
                               f'Alpha (Cooldown): {s.opts.alpha}\n' + \

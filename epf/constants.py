@@ -51,3 +51,9 @@ INSTR_AFL_ENV = "__AFL_SHM_ID"
 # the instrumentation, with falsifies insights
 INSTR_AFL_MAP_SIZE_POW2 = 16
 INSTR_AFL_MAP_SIZE = 1 << INSTR_AFL_MAP_SIZE_POW2
+
+TRACE = False
+SPOT_MUT = 0.8
+BATCH = False
+
+SHM_OVERWRITE = ""

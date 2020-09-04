@@ -1,5 +1,5 @@
 import time
-from typing import List, TYPE_CHECKING, Any
+from typing import List, TYPE_CHECKING, Any, Tuple
 
 from epf.chromo import Individual
 from epf.ip_constants import DEFAULT_MAX_RECV
@@ -27,16 +27,24 @@ class TestCase(object):
 
         self.name = f"{self.id}.{self.individual.species.replace(' ', '_')}.{str(self.individual.identity)[-12:]}"
         self.errors = []
-        self.coverage_increase = None
         self.needed_restart = False
         self.exit_code = None
         self.individual.testcase = self
+        self.done = False
+        self._cov = None
+        self.coverage_increase = False
 
     def add_error(self, error):
         """ Add an error to the current case """
         self.errors.append(error)
 
-    def run(self) -> bool:
+    @property
+    def coverage_snapshot(self):
+        if self._cov is None:
+            self._cov = shm.get().directed_branch_coverage()
+        return self._cov
+
+    def run(self) -> Tuple[Any, bool]:
 
         """
         Run the test case, transmitting the full path
@@ -49,13 +57,9 @@ class TestCase(object):
                  False if there was a connection issue and the target was paused, so the TestCase was not run
         """
         # target has been run before
-        if self.coverage_increase is not None:
-            return False
+        if self.done:
+            return None, True
         # assert target is healthy
-        complications, retval = self.session.restarter.assert_healthy()
-        if complications:
-            # previous case crashed target!
-            self.session.add_last_case_as_suspect(Exception("process_exit"), complications, retval)
         try:
             self.open_fuzzing_target()
             population = self.session.populations[self.individual.species]
@@ -68,14 +72,15 @@ class TestCase(object):
             for post in population.state_graph.traverse_post_phase():
                 self.transmit(post.bytes, receive=post.recv_after_send, relax=self.session.opts.post_relax)
             self.session.target.close()
-            coverage_map = shm.get()
-            self.coverage_increase = coverage_map.changed
-            coverage_map.update_state()
-            return True
-        except exception.EPFPaused:
-            return False  # Returns False when the fuzzer got paused, as it did not run the TestCase
+            time.sleep(0.01)
+            self.done = True
+            return None, True
+        except exception.EPFPaused as e:
+            return e, False  # Returns False when the fuzzer got paused, as it did not run the TestCase
         except exception.EPFTestCaseAborted as e:  # There was a transmission Error, we end the test case
-            return True
+            return e, False
+        except Exception as e:
+            return e, False
 
     def open_fuzzing_target(self):
         """
@@ -91,8 +96,10 @@ class TestCase(object):
             try:
                 target.open()  # Second try, just in case we have a network error not caused by the fuzzer
             except Exception as e:
-                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
-                self.session.add_last_case_as_suspect(e, complications, retval)
+                raise exception.EPFTargetConnectionFailedError()
+                # MARKER
+                # complications, retval = self.session.restarter.assert_healthy(force_kill=True)
+                # self.session.add_last_case_as_suspect(e, complications, retval)
 
     def transmit(self, data: bytes, receive=False, relax=False):
         """
@@ -111,20 +118,32 @@ class TestCase(object):
             self.session.target.send(data)
         except Exception as e:
             if not relax:
-                complications, retval = self.session.restarter.assert_healthy(force_kill=True)
-                self.session.add_current_case_as_suspect(e, complications, retval)
-            return
+                # healthy = self.session.restarter.healthy()
+                # if not healthy:
+                #     self.session.restarter.kill()
+                #     retval = self.session.restarter.retval
+                #     self.session.restarter.crashes += 1
+                #     self.session.restarter.retval = None
+                #     self.session.add_current_case_as_suspect(e, True, retval)
+                #     return
+                raise e
 
         # 2. RECEIVE DATA
         if receive:
             try:
                 last_recv = self.session.target.recv(DEFAULT_MAX_RECV)
                 if not last_recv:
-                    raise Exception("empty response after send")
+                    raise exception.EPFTargetRecvTimeout
             except Exception as e:
-                if not relax:
-                    complications, retval = self.session.restarter.assert_healthy(force_kill=True)
-                    self.session.add_current_case_as_suspect(e, complications, retval)
+                # healthy = self.session.restarter.healthy()
+                # if not healthy:
+                #     self.session.restarter.kill()
+                #     retval = self.session.restarter.retval
+                #     self.session.restarter.crashes += 1
+                #     self.session.restarter.retval = None
+                #     self.session.add_current_case_as_suspect(e, True, retval)
+                #     return
+                raise e
 
     # --------------------------------------------------------------- #
 

@@ -1,7 +1,5 @@
-import inspect
 import subprocess
 import time
-from typing import Tuple
 
 import psutil
 
@@ -10,7 +8,6 @@ from ..constants import INSTR_AFL_ENV
 from .. import shm
 import shlex
 import os
-import sys
 
 
 class AFLForkRestarter(IRestarter):
@@ -49,9 +46,8 @@ class AFLForkRestarter(IRestarter):
         self._argv = shlex.split(self.cmd)
         self._path = self._argv[0]
         self.process = None
-        self.restarts = -1
+        self.restarts = 0
         self.crashes = 0
-        self.retval = None
 
     @staticmethod
     def name() -> str:
@@ -71,7 +67,7 @@ class AFLForkRestarter(IRestarter):
         """
         return "'<executable> [<argument> ...]' (Pass command and arguments within quotes, as only one argument)"
 
-    def restart(self, *args, **kwargs) -> bool:
+    def restart(self, *args, planned=False) -> bool:
         """
         Restarts the target
 
@@ -84,43 +80,93 @@ class AFLForkRestarter(IRestarter):
             environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
             cid = self._fork(environ)  # actually fork
             self.process = psutil.Process(cid)
-            time.sleep(2.0)
+            if not self._wait_for_status(psutil.STATUS_SLEEPING):
+                return False
         except Exception as e:
             return False
-        self.restarts += 1
+        if not planned:
+            self.restarts += 1
         return self.healthy()
 
-    def assert_healthy(self, force_kill=False) -> Tuple[bool, int]:
-        while not self.healthy() or force_kill:
-            self.kill()
-            self.restart()
-            force_kill = False
-        ret = (False, 0) if self.retval is None else (True, self.retval)
-        if self.retval is not None:
-            self.crashes += 1
-        self.retval = None
-        return ret
+    def suspend(self):
+        try:
+            if self.process is not None:
+                self.process.suspend()
+                return self._wait_for_status(psutil.STATUS_STOPPED)
+        except Exception:
+            pass
+        return False
 
-    def kill(self):
+    def resume(self):
+        try:
+            if self.process is not None:
+                self.process.resume()
+                return self._wait_for_status(psutil.STATUS_STOPPED, negate=True)
+        except Exception:
+            pass
+        return False
+
+    def _wait_for_status(self, status: str, timeout: float = 1.0, sleep_time: float = 0.0001, negate: bool = False) -> bool:
+        if self.process is None:
+            return False
+        cumulative_t = 0.0
+        if not negate:
+            while self.process.status() is not status:
+                # we are literally waiting for the process to wait on its socket
+                if cumulative_t >= timeout:
+                    return False
+                time.sleep(sleep_time)
+                cumulative_t += sleep_time
+        else:
+            while self.process.status() is status:
+                # we are literally waiting for the process to wait on its socket
+                if cumulative_t >= timeout:
+                    return False
+                time.sleep(sleep_time)
+                cumulative_t += sleep_time
+        return True
+
+    # def assert_healthy(self, force_kill=False) -> Tuple[bool, int]:
+    #     while not self.healthy() or force_kill:
+    #         self.kill()
+    #         self.restart()
+    #         force_kill = False
+    #     ret = (False, 0) if self.retval is None else (True, self.retval)
+    #     if self.retval is not None:
+    #         self.crashes += 1
+    #     self.retval = None
+    #     return ret
+
+    def kill(self, ignore=False):
         if self.process is None:
             return
+        retval = 0
         children = self.process.children()
         for child in children:
             child.terminate()
         _, alive = psutil.wait_procs(children, timeout=1.0)
         for bad_boy in alive:
             bad_boy.kill()
+        if self.process.status() == psutil.STATUS_STOPPED:
+            self.resume()
         self.process.terminate()
         _, alive = psutil.wait_procs([self.process], timeout=1.0)
         if len(alive) > 0:
             self.process.kill()
             psutil.wait_procs([self.process], timeout=1.0)
-        if self.retval is None:
-            self.retval = self.process.returncode
+        if not ignore:
+            retval = self.process.returncode
+            self.crashes += 1
         self.process = None
+        return retval
 
     def healthy(self) -> bool:
-        return self.process is not None and self.process.status() not in [psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE]
+        try:
+            # if self.process is not None:
+            #     print(self.process.status())
+            return self.process is not None and self.process.status() not in [psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE]
+        except Exception:
+            return False
 
     def _fork(self, environ: {}) -> int:
         """

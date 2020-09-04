@@ -1,9 +1,9 @@
 import atexit
 import array
-import time
 from multiprocessing import shared_memory
 
 from .constants import INSTR_AFL_MAP_SIZE
+from . import constants
 from .helpers.helpers import get_random_string
 
 
@@ -16,33 +16,21 @@ class AFLShm(shared_memory.SharedMemory):
     this to work.
     """
     def __init__(self, identifier: str = None):
-        if identifier is None:
+        if identifier is None and constants.SHM_OVERWRITE == "":
             identifier = 'epf_afl_{}_{}'.format(get_random_string(4), get_random_string(12))
+        elif constants.SHM_OVERWRITE != "":
+            identifier = constants.SHM_OVERWRITE
         super().__init__(name=identifier, create=True, size=INSTR_AFL_MAP_SIZE)
-        self.state = self.directed_branch_coverage()
-        self.tstamp = time.time()
+        self.history = array.array('B', [False] * INSTR_AFL_MAP_SIZE)
+        self.cnt = 0
 
-    def update_state(self):
-        if self.changed:
-            self.state = self.directed_branch_coverage()
-
-    @property
-    def changed(self):
-        res = self.directed_branch_coverage()[0] != self.state[0]
-        if res:
-            self.tstamp = time.time()
-        return res
-
-    def directed_branch_coverage(self) -> (int, int):
+    def directed_branch_coverage(self) -> int:
         snap = array.array('B', self.buf)
-        dedup_cnt = 0
-        branch_cnt = 0
-        for b in snap:
-            if b <= 0:
-                continue
-            branch_cnt += b
-            dedup_cnt += 1
-        return dedup_cnt, branch_cnt
+        for i, b in enumerate(snap):
+            if b != 0 and not self.history[i]:
+                self.cnt += 1
+                self.history[i] = True
+        return self.cnt
 
 
 __shm = None

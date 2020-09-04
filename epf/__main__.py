@@ -11,7 +11,7 @@ import argparse
 from numpy import random
 import random as stdrandom
 
-from . import Target, SocketConnection
+from . import Target, SocketConnection, constants
 from .fuzzers import IFuzzer
 from .restarters import IRestarter
 from .session import Session
@@ -55,6 +55,9 @@ class EPF(object):
             beta=self.args.beta,
             population_limit=self.args.plimit,
             debug=self.args.debug,
+            output=self.args.output,
+            dump_shm=self.args.dump_shm,
+            deterministic=self.args.deterministic,
         )
 
     # --------------------------------------------------------------- #
@@ -85,12 +88,19 @@ class EPF(object):
         fuzz_grp.add_argument("--fuzzer", dest="fuzz_protocol", help='application layer fuzzer', required=True,
                               choices=fuzzers)
         fuzz_grp.add_argument('--debug', action='store_true', help='enable debug.csv')
+        fuzz_grp.add_argument('--batch', action='store_true', help='non-interactive, very quiet mode')
+        fuzz_grp.add_argument('--dtrace', action='store_true', help='extremely verbose debug tracing')
         fuzz_grp.add_argument('--pcap', dest='pcap', type=str, required=True, help='pcap population seed')
         fuzz_grp.add_argument('--seed', dest='seed', type=int, default=0, help='prng seed')
         fuzz_grp.add_argument('--alpha', dest='alpha', type=float, default=0.995, help='simulated annealing cooldown parameter')
         fuzz_grp.add_argument('--beta', dest='beta', type=float, default=0.950, help='simulated annealing reheat parameter')
+        fuzz_grp.add_argument('--smut', dest='smut', type=float, default=0.8, help='spot mutation probability')
         fuzz_grp.add_argument('--plimit', dest='plimit', type=int, default=10000, help='population limit')
         fuzz_grp.add_argument('--budget', dest='time_budget', type=float, default=0.0, help='time budget')
+        fuzz_grp.add_argument('--output', dest='output', type=str, default="", help='output dir')
+        fuzz_grp.add_argument('--shm_id', dest='shm_id', type=str, default="", help='custom shared memory id overwrite')
+        fuzz_grp.add_argument('--dump_shm', dest='dump_shm', action='store_true', default=False, help='dump shm after run')
+        fuzz_grp.add_argument('--deterministic', dest='deterministic', action='store_true', default=False, help='SLOW mode, ~2x less iterations, but fairly deterministic runs (verify by comparing two --dtrace runs)')
 
         restarters_grp = self.parser.add_argument_group('Restart options')
         restarters_help = 'Restarter Modules:\n'
@@ -109,11 +119,19 @@ class EPF(object):
             (argparse.Namespace) Argparse arguments
         """
         args = self.parser.parse_args()
+        if args.dtrace:
+            constants.TRACE = True
+        constants.SPOT_MUT = args.smut
+        if args.batch:
+            constants.BATCH = True
 
-        args.fuzz_protocol = [icl for icl in IFuzzer.__subclasses__() if icl.name == args.fuzz_protocol][0]
-        args.fuzz_protocol.initialize(**args.__dict__)
+        if args.shm_id != "":
+            constants.SHM_OVERWRITE = args.shm_id
+
         random.seed(args.seed)
         stdrandom.seed(args.seed)
+        args.fuzz_protocol = [icl for icl in IFuzzer.__subclasses__() if icl.name == args.fuzz_protocol][0]
+        args.fuzz_protocol.initialize(**args.__dict__)
 
         self.restart_module = None
         if len(args.restart) > 0:

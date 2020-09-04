@@ -251,6 +251,7 @@ class SessionPrompt(CommandPrompt):
         self.session.restarter.kill()
         self.session.bugs_csv.flush()
         self.session.bugs_csv.close()
+        shm.get().close()
         if self.session.opts.debug:
             self.session.debug_csv.flush()
             self.session.debug_csv.close()
