@@ -137,7 +137,7 @@ class Session(object):
         self.active_individual = None
         self.active_testcase = None
         self.previous_testcase = None
-        self.drain_seed_individuals = False
+        self.drain_seed_individuals = True
 
         self.is_paused = False
         self.prompt = None
@@ -172,6 +172,7 @@ class Session(object):
     def write_run_json(self):
         json_file = os.path.join(self.result_dir, "run.json")
         mem = shm.get()
+        mem.acquire()
 
         data = {
             "general": {
@@ -213,6 +214,7 @@ class Session(object):
                 },
             },
         }
+        mem.release()
         with open(json_file, 'w') as f:
             json.dump(data, f, indent=2)
 
@@ -292,7 +294,9 @@ class Session(object):
                 sp = os.path.join(self.result_dir, 'shm.bin')
                 with open(sp, 'wb') as dst:
                     mem = shm.get()
-                    dst.write(mem.buf.tobytes())
+                    mem.acquire()
+                    dst.write(mem.buf)
+                    mem.release()
                     mem.close()
 
     # --------------------------------------------------------------- #
@@ -314,11 +318,12 @@ class Session(object):
     def generate_individual(self):
         self.active_individual = self.active_population.new_child()
 
-    def evaluate_individual(self):
+    def evaluate_individual(self, retry=False):
         # 1. create test case
-        self.test_case_cnt += 1
-        self.previous_testcase = self.active_testcase
-        self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
+        if not retry:
+            self.test_case_cnt += 1
+            self.previous_testcase = self.active_testcase
+            self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
         if self.restarter.healthy() and not self.opts.deterministic:
             self.restarter.resume()
         else:
@@ -329,15 +334,18 @@ class Session(object):
     def update_population(self, failed: Tuple[Exception, bool]) -> bool:
         e, executed = failed
         crashed = not self.restarter.healthy()
-        # if not executed and (isinstance(e, exception.EPFPaused) or isinstance(e, exception.EPFTargetConnectionFailedError)):
-        #     return True
+        retry = False
         if (crashed or not executed) and not (isinstance(e, exception.EPFPaused) or isinstance(e, exception.EPFTargetConnectionFailedError)):
             retval = self.restarter.kill(ignore=False)
             self.restarter.retval = None
             self.add_current_case_as_suspect(e, True, retval)
         else:
+            if isinstance(e, Exception):
+                retry = True
             if self.opts.deterministic or not self.restarter.suspend():
                 self.restarter.kill(ignore=True)
+        if retry:
+            return False
         cov = self.active_testcase.coverage_snapshot
         change = cov != self.previous_testcase.coverage_snapshot if self.previous_testcase is not None else True
         if constants.TRACE:
@@ -350,7 +358,7 @@ class Session(object):
         else:
             self.active_population.update(self.active_individual, heat=self.energy, add=random.random() <= self.energy)
         self.active_population.shrink(self.opts.population_limit)
-        return False
+        return True
 
     def update_bugs(self):
         if not self.update_bug_db:
@@ -439,18 +447,27 @@ class Session(object):
                 self.drain_seed_iterator = iter(self.active_population)
                 continue
             self.evaluate_individual()
+            self.restarter.kill(ignore=True)
+            self.restarter.restart(planned=True)
             self.update_bugs()
             self.debug()
 
     def run_all(self):
         if self.drain_seed_individuals:
             self.drain()
-        while self.cont():                  # while CONTINUE(C) do X
-            self.schedule_population()      #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- X
-            self.generate_individual()      #   tcs  <- INPUTGEN(conf) <----- NEXT
-            failed = self.evaluate_individual()      #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
-            retry = self.update_population(failed)        #   C <- CONFUPDATE(C', conf, execinfos)
-            self.update_bugs()              #   B <- B u B'
+        while self.cont():                                      # while CONTINUE(C) do X
+            self.schedule_population()                          #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- X
+            self.generate_individual()                          #   tcs  <- INPUTGEN(conf) <----- NEXT
+            retry = False
+            while True:
+                # retry
+                failed = self.evaluate_individual(retry=retry)  #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
+                retry = not self.update_population(failed)      #   C <- CONFUPDATE(C', conf, execinfos)
+                if not retry:
+                    break
+                if constants.TRACE:
+                    print(f"retry, {self.test_case_cnt}", file=sys.stderr)
+            self.update_bugs()                                  #   B <- B u B'
             self.debug()
 
     # ================================================================#

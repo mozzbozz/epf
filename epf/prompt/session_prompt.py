@@ -251,7 +251,10 @@ class SessionPrompt(CommandPrompt):
         self.session.restarter.kill()
         self.session.bugs_csv.flush()
         self.session.bugs_csv.close()
-        shm.get().close()
+        mem = shm.get()
+        mem.acquire()
+        mem.close()
+        mem.release()
         if self.session.opts.debug:
             self.session.debug_csv.flush()
             self.session.debug_csv.close()
@@ -281,10 +284,13 @@ class SessionPrompt(CommandPrompt):
             less = subprocess.Popen(["less"], stdin=subprocess.PIPE);
             less.stdin.write(('{:10}' + ('{:02X} ' * 8 + ' ') * 2 + '{}').format(*hdr).encode(encoding='utf-8'))
             less.stdin.write(b'\n' + b'-' * 76 + b'\n')
-            for i, line in enumerate(hexdump.hexdump(data=shm.get().buf, result='generator')):
+            mem = shm.get()
+            mem.acquire()
+            for i, line in enumerate(hexdump.hexdump(data=mem.buf, result='generator')):
                 if start <= i < stop:
                     less.stdin.write(line.encode(encoding='utf-8'))
                     less.stdin.write(b'\n')
+            mem.release()
             less.stdin.close()
             less.wait()
         except BrokenPipeError:
@@ -304,7 +310,10 @@ class SessionPrompt(CommandPrompt):
         filepath = tokens[0]
         try:
             with open(filepath, 'wb') as fd:
-                clone = bytearray(array.array('B', shm.get().buf))
+                mem = shm.get()
+                mem.acquire()
+                clone = bytearray(array.array('B', mem.buf))
+                mem.release()
                 fd.write(clone)
                 fd.flush()
                 self._print_color('green', 'Dumped {} bytes shared memory into \'{}\''.format(len(clone), filepath))

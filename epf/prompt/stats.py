@@ -1,7 +1,9 @@
+import sys
 import time
 
 import npyscreen
 from epf import shm, constants
+import numpy as np
 
 
 class Stats(npyscreen.NPSAppManaged):

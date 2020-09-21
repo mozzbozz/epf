@@ -197,7 +197,7 @@ class Population(object):
                 # increase probability of parents to be chosen by moving them up in the order
                 new_idx = min(0, p.index - 1)
                 #if i == 0 and len(parents) == 2 and p.index < parents[i + 1].index and new_idx >= parents[i+1].index:
-                if i == 0 and p.index < parents[i + 1].index and new_idx >= parents[i + 1].index:
+                if i == 0 and len(parents) == 2 and p.index < parents[i + 1].index and new_idx >= parents[i + 1].index:
                     parents[i + 1].index -= 1
                 self._pop.pop(p.index)
                 self._pop.insert(new_idx, p)

@@ -7,6 +7,7 @@ from .irestarter import IRestarter
 from ..constants import INSTR_AFL_ENV
 from .. import shm
 import shlex
+import inspect
 import os
 
 
@@ -75,8 +76,15 @@ class AFLForkRestarter(IRestarter):
         :param kwargs: ignored
         :return: bool
         """
+        print("restart")
+        curframe = inspect.currentframe()
+        calframe = inspect.getouterframes(curframe, 2)
+        print('caller name:', calframe[1][3])
         try:
-            identifier = shm.get().name  # get instrumentation shared memory id
+            mem = shm.get()
+            mem.acquire()
+            identifier = mem.name  # get instrumentation shared memory id
+            mem.release()
             environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
             cid = self._fork(environ)  # actually fork
             self.process = psutil.Process(cid)
@@ -89,8 +97,10 @@ class AFLForkRestarter(IRestarter):
         return self.healthy()
 
     def suspend(self):
+        return True
         try:
             if self.process is not None:
+                self._wait_for_status(psutil.STATUS_SLEEPING)
                 self.process.suspend()
                 return self._wait_for_status(psutil.STATUS_STOPPED)
         except Exception:
@@ -98,10 +108,11 @@ class AFLForkRestarter(IRestarter):
         return False
 
     def resume(self):
+        return True
         try:
             if self.process is not None:
                 self.process.resume()
-                return self._wait_for_status(psutil.STATUS_STOPPED, negate=True)
+                return self._wait_for_status(psutil.STATUS_SLEEPING)
         except Exception:
             pass
         return False
@@ -110,20 +121,23 @@ class AFLForkRestarter(IRestarter):
         if self.process is None:
             return False
         cumulative_t = 0.0
-        if not negate:
-            while self.process.status() is not status:
-                # we are literally waiting for the process to wait on its socket
-                if cumulative_t >= timeout:
-                    return False
-                time.sleep(sleep_time)
-                cumulative_t += sleep_time
-        else:
-            while self.process.status() is status:
-                # we are literally waiting for the process to wait on its socket
-                if cumulative_t >= timeout:
-                    return False
-                time.sleep(sleep_time)
-                cumulative_t += sleep_time
+        try:
+            if not negate:
+                while self.process.status() is not status:
+                    # we are literally waiting for the process to wait on its socket
+                    if cumulative_t >= timeout:
+                        return False
+                    time.sleep(sleep_time)
+                    cumulative_t += sleep_time
+            else:
+                while self.process.status() is status:
+                    # we are literally waiting for the process to wait on its socket
+                    if cumulative_t >= timeout:
+                        return False
+                    time.sleep(sleep_time)
+                    cumulative_t += sleep_time
+        except Exception:
+            return False
         return True
 
     # def assert_healthy(self, force_kill=False) -> Tuple[bool, int]:
@@ -138,25 +152,33 @@ class AFLForkRestarter(IRestarter):
     #     return ret
 
     def kill(self, ignore=False):
+        print("kill")
+        curframe = inspect.currentframe()
+        calframe = inspect.getouterframes(curframe, 2)
+        print('caller name:', calframe[1][3])
         if self.process is None:
             return
-        retval = 0
-        children = self.process.children()
-        for child in children:
-            child.terminate()
-        _, alive = psutil.wait_procs(children, timeout=1.0)
-        for bad_boy in alive:
-            bad_boy.kill()
-        if self.process.status() == psutil.STATUS_STOPPED:
-            self.resume()
-        self.process.terminate()
-        _, alive = psutil.wait_procs([self.process], timeout=1.0)
-        if len(alive) > 0:
-            self.process.kill()
-            psutil.wait_procs([self.process], timeout=1.0)
-        if not ignore:
-            retval = self.process.returncode
-            self.crashes += 1
+        try:
+            self._wait_for_status(status=psutil.STATUS_SLEEPING)
+            retval = 0
+            children = self.process.children()
+            for child in children:
+                child.terminate()
+            _, alive = psutil.wait_procs(children, timeout=1.0)
+            for bad_boy in alive:
+                bad_boy.kill()
+            if self.process.status() == psutil.STATUS_STOPPED:
+                self.resume()
+            self.process.terminate()
+            _, alive = psutil.wait_procs([self.process], timeout=1.0)
+            if len(alive) > 0:
+                self.process.kill()
+                psutil.wait_procs([self.process], timeout=1.0)
+            if not ignore:
+                retval = self.process.returncode
+                self.crashes += 1
+        except Exception:
+            retval = 0
         self.process = None
         return retval
 

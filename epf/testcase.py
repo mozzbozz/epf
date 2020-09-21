@@ -41,7 +41,10 @@ class TestCase(object):
     @property
     def coverage_snapshot(self):
         if self._cov is None:
-            self._cov = shm.get().directed_branch_coverage()
+            mem = shm.get()
+            mem.acquire()
+            self._cov = mem.directed_branch_coverage()
+            mem.release()
         return self._cov
 
     def run(self) -> Tuple[Any, bool]:
@@ -71,6 +74,7 @@ class TestCase(object):
             # process post-phase of population for state transitions
             for post in population.state_graph.traverse_post_phase():
                 self.transmit(post.bytes, receive=post.recv_after_send, relax=self.session.opts.post_relax)
+            time.sleep(0.01)
             self.session.target.close()
             time.sleep(0.01)
             self.done = True

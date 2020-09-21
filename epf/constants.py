@@ -57,3 +57,4 @@ SPOT_MUT = 0.8
 BATCH = False
 
 SHM_OVERWRITE = ""
+SHM_POSIX = False
