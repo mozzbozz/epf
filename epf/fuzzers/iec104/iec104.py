@@ -39,8 +39,8 @@ class IEC104(IFuzzer):
             population_crossover_operator=Crossover.single_point,
             population_mutation_probability=constants.SPOT_MUT,
         )
-        testfr = TransitionPayload(name="testfr", payload=b'\x68\x04\x43\x00\x00\x00', recv_after_send=True)
-        startdt = TransitionPayload(name="startdt", payload=b'\x68\x04\x07\x00\x00\x00', recv_after_send=True)
+        testfr = TransitionPayload(name="testfr", payload=b'\x68\x04\x43\x00\x00\x00', recv_after_send=True)#True)
+        startdt = TransitionPayload(name="startdt", payload=b'\x68\x04\x07\x00\x00\x00', recv_after_send=True)#True)
         stopdt = TransitionPayload(name="stopdt", payload=b'\x68\x04\x13\x00\x00\x00', recv_after_send=False)
         # <-- in case we want to receive after sending an individual of a specific population
         for species, pop in IEC104.populations.items():

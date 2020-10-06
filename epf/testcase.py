@@ -59,10 +59,6 @@ class TestCase(object):
         Returns: True if the TestCase was run and data was transmitted (even if transmission was cut)
                  False if there was a connection issue and the target was paused, so the TestCase was not run
         """
-        # target has been run before
-        if self.done:
-            return None, True
-        # assert target is healthy
         try:
             self.open_fuzzing_target()
             population = self.session.populations[self.individual.species]
@@ -71,11 +67,13 @@ class TestCase(object):
                 self.transmit(pre.bytes, receive=pre.recv_after_send)
             # fuzz individual
             self.transmit(self.individual.serialize(), receive=population.recv_after_send)
-            # process post-phase of population for state transitions
             for post in population.state_graph.traverse_post_phase():
                 self.transmit(post.bytes, receive=post.recv_after_send, relax=self.session.opts.post_relax)
             time.sleep(0.01)
-            self.session.target.close()
+            try:
+                self.session.target.close()
+            except Exception:
+                pass
             time.sleep(0.01)
             self.done = True
             return None, True
@@ -97,8 +95,14 @@ class TestCase(object):
         try:
             target.open()
         except (exception.EPFTargetConnectionFailedError, Exception):
+            for i in range(0, 3):
+                try:
+                    time.sleep(0.25)
+                    target.open()  # Second try, just in case we have a network error not caused by the fuzzer
+                except Exception:
+                    pass
             try:
-                target.open()  # Second try, just in case we have a network error not caused by the fuzzer
+                target.open()
             except Exception as e:
                 raise exception.EPFTargetConnectionFailedError()
                 # MARKER

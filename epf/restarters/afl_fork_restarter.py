@@ -7,7 +7,6 @@ from .irestarter import IRestarter
 from ..constants import INSTR_AFL_ENV
 from .. import shm
 import shlex
-import inspect
 import os
 
 
@@ -76,10 +75,6 @@ class AFLForkRestarter(IRestarter):
         :param kwargs: ignored
         :return: bool
         """
-        print("restart")
-        curframe = inspect.currentframe()
-        calframe = inspect.getouterframes(curframe, 2)
-        print('caller name:', calframe[1][3])
         try:
             mem = shm.get()
             mem.acquire()
@@ -88,7 +83,7 @@ class AFLForkRestarter(IRestarter):
             environ = _update_env(identifier)  # add pseudorandom shm identifier to environment variable of child process
             cid = self._fork(environ)  # actually fork
             self.process = psutil.Process(cid)
-            if not self._wait_for_status(psutil.STATUS_SLEEPING):
+            if not self._wait_for_status(psutil.STATUS_SLEEPING, timeout=5.0):
                 return False
         except Exception as e:
             return False
@@ -151,34 +146,30 @@ class AFLForkRestarter(IRestarter):
     #     self.retval = None
     #     return ret
 
+
     def kill(self, ignore=False):
-        print("kill")
-        curframe = inspect.currentframe()
-        calframe = inspect.getouterframes(curframe, 2)
-        print('caller name:', calframe[1][3])
+        retval = -1
         if self.process is None:
-            return
+            return retval
         try:
-            self._wait_for_status(status=psutil.STATUS_SLEEPING)
-            retval = 0
-            children = self.process.children()
-            for child in children:
-                child.terminate()
-            _, alive = psutil.wait_procs(children, timeout=1.0)
-            for bad_boy in alive:
-                bad_boy.kill()
-            if self.process.status() == psutil.STATUS_STOPPED:
-                self.resume()
-            self.process.terminate()
-            _, alive = psutil.wait_procs([self.process], timeout=1.0)
-            if len(alive) > 0:
-                self.process.kill()
-                psutil.wait_procs([self.process], timeout=1.0)
+            if self.healthy():
+                self._wait_for_status(status=psutil.STATUS_SLEEPING)
+            retval = -1
+            try:
+                self.process.terminate()
+            except Exception:
+                pass
+            #self.process.kill()
+            retval = self.process.wait()
+            # psutil.wait_procs([self.process], callback=self.cb)
+            # while self.wait:
+            #     print("waiting")
+            #     time.sleep(0.1)
+            # retval = int(self.process.returncode)
             if not ignore:
-                retval = self.process.returncode
                 self.crashes += 1
         except Exception:
-            retval = 0
+            pass
         self.process = None
         return retval
 

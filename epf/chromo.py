@@ -1,19 +1,15 @@
-import base64
 import sys
 from typing import Dict, Any, Callable, Union, Tuple
 
-from scapy.asn1.ber import BERcodec_BIT_STRING, BER_tagging_dec
-from scapy.asn1fields import ASN1F_BIT_STRING
 from . import constants
 from scapy.fields import Field, PacketListField
 from scapy.all import rdpcap
 from scapy.packet import Packet
 import uuid
-from numpy import random, uint64, iinfo
+from numpy import random
 import random as stdrandom
 from uuid import UUID
 
-from scapy.volatile import RandString
 
 from .transition_payload import TransitionGraph
 

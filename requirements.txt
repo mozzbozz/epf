@@ -2,6 +2,8 @@ prompt-toolkit>=3.0.0,<4.0.0
 attrs~=19.3.0
 pygments~=2.6.1
 pydot
+sysv_ipc
+posix_ipc
 
 networkx~=2.4
 scapy~=2.4.3

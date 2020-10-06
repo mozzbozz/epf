@@ -123,9 +123,8 @@ class Session(object):
         self.suspects = []
 
         self.restarter = restarter
-        if not self.opts.deterministic:
-            self.restarter.restart(planned=True)
-            self.restarter.suspend()
+        self.restarter.restart(planned=True)
+        # self.restarter.suspend() TODO
 
         # Some variables that will be used during fuzzing
         self.time_budget = SessionClock(time_budget)
@@ -168,6 +167,7 @@ class Session(object):
             self.prepare_debug_csv()
         self.update_bug_db = False
         self.t_last_increase = time.time()
+        self.test_case_buffer = []
 
     def write_run_json(self):
         json_file = os.path.join(self.result_dir, "run.json")
@@ -318,34 +318,48 @@ class Session(object):
     def generate_individual(self):
         self.active_individual = self.active_population.new_child()
 
-    def evaluate_individual(self, retry=False):
+    def evaluate_individual(self):
         # 1. create test case
-        if not retry:
-            self.test_case_cnt += 1
-            self.previous_testcase = self.active_testcase
-            self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
-        if self.restarter.healthy() and not self.opts.deterministic:
-            self.restarter.resume()
-        else:
-            self.restarter.restart(planned=True)
-        state = self.active_testcase.run()
-        return state
+        self.test_case_cnt += 1
+        self.previous_testcase = self.active_testcase
+        self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
+        self.test_case_buffer += [self.active_testcase]
+        if len(self.test_case_buffer) > 10:
+            self.test_case_buffer.pop(0)
+        if not self.restarter.healthy():
+            self.inspect_test_case_buffer()
+        err, executed = self.active_testcase.run()
+        return err, executed
 
-    def update_population(self, failed: Tuple[Exception, bool]) -> bool:
-        e, executed = failed
+    def inspect_test_case_buffer(self):
+        target_ret_val = self.restarter.kill(ignore=True)
+        self.restarter.restart(planned=False)
+        ln = len(self.test_case_buffer)
+        found = False
+        for tcs in self.test_case_buffer:
+            err, executed = tcs.run()
+            time.sleep(1.0)
+            if not self.restarter.healthy():
+                tcs.needed_restart = True
+                tcs.exit_code = target_ret_val
+                self.restarter.crashes += 1
+                self.restarter.restarts += 1
+                self.add_suspect(tcs, err, True, target_ret_val)
+                self.restarter.restart(planned=False)
+                found = True
+                break
+            self.restarter.restart(planned=False)
+        if not found:
+            for tcs in self.test_case_buffer:
+                self.add_suspect(tcs, Exception("uncertain"), True, 0)
+        self.test_case_buffer = []
+
+    def update_population(self, err, executed) -> bool:
         crashed = not self.restarter.healthy()
-        retry = False
-        if (crashed or not executed) and not (isinstance(e, exception.EPFPaused) or isinstance(e, exception.EPFTargetConnectionFailedError)):
-            retval = self.restarter.kill(ignore=False)
-            self.restarter.retval = None
-            self.add_current_case_as_suspect(e, True, retval)
-        else:
-            if isinstance(e, Exception):
-                retry = True
-            if self.opts.deterministic or not self.restarter.suspend():
-                self.restarter.kill(ignore=True)
-        if retry:
-            return False
+        if (crashed or not executed) and not isinstance(err, exception.EPFPaused):
+            self.inspect_test_case_buffer()
+        elif crashed:
+            self.restarter.restart()
         cov = self.active_testcase.coverage_snapshot
         change = cov != self.previous_testcase.coverage_snapshot if self.previous_testcase is not None else True
         if constants.TRACE:
@@ -429,6 +443,8 @@ class Session(object):
         if self.time_budget.exhausted:
             self.is_paused = True
         result = not (self.time_budget.exhausted or self.is_paused)
+        if int(self.time_budget.execution_time) % 10 == 0 and constants.BATCH:
+            print(f"{self.time_budget.execution_time}/{self.time_budget.budget}")
         if result:
             self.time_budget.start()
         return result
@@ -455,40 +471,29 @@ class Session(object):
     def run_all(self):
         if self.drain_seed_individuals:
             self.drain()
-        while self.cont():                                      # while CONTINUE(C) do X
-            self.schedule_population()                          #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- X
-            self.generate_individual()                          #   tcs  <- INPUTGEN(conf) <----- NEXT
-            retry = False
-            while True:
-                # retry
-                failed = self.evaluate_individual(retry=retry)  #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
-                retry = not self.update_population(failed)      #   C <- CONFUPDATE(C', conf, execinfos)
-                if not retry:
-                    break
-                if constants.TRACE:
-                    print(f"retry, {self.test_case_cnt}", file=sys.stderr)
-            self.update_bugs()                                  #   B <- B u B'
+        #########
+        while self.cont():                                      # while CONTINUE(C)
+            self.schedule_population()                          #   conf <- SCHEDULE(C, t_elapsed, t_limit)
+            self.generate_individual()                          #   tcs  <- INPUTGEN(conf)
+            err, executed = self.evaluate_individual()
+            self.update_population(err, executed)
+            self.update_bugs()
+
+
+
+
+            #retry = False
+            #while True:
+            #    # retry
+            #    failed = self.evaluate_individual(retry=retry)  #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
+            #    retry = not self.update_population(failed)      #   C <- CONFUPDATE(C', conf, execinfos)
+            #    if not retry:
+            #        break
+            #    if constants.TRACE:
+            #        print(f"retry, {self.test_case_cnt}", file=sys.stderr)
+            #self.update_bugs()                                  #   B <- B u B'
+            ##################
             self.debug()
-
-    # ================================================================#
-    # Graph related functions                                         #
-    # =====================================================   ===========#
-
-    def connect(self, src: Any, dst: Any = None, callback: callable = None):
-        """
-        Connects a request to the session as a root node, or two request between them. Optionally specifying a callback
-        in between requests.
-        It updates the number of total mutations
-
-        Args:
-            src: First request to connect
-            dst: Second Request to connect, if None it will connect the src Request as a root node in the session graph
-            callback: Optional, specify a callback that will be run in between requests and can change the data
-        """
-        try:
-            self.graph.connect(src, dst, callback)
-        except exception.EPFRuntimeError:
-            pass
 
     # ================================================================#
     # Suspects, disabled elements                                     #
@@ -496,15 +501,14 @@ class Session(object):
 
     def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         self.add_suspect(self.active_testcase, error, complications, exit_code)
-        self.update_bug_db = True
 
     def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         if self.previous_testcase is None:
             return
         self.add_suspect(self.previous_testcase, error, complications, exit_code)
-        self.update_bug_db = True
 
     def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
+        self.update_bug_db = True
         testcase.add_error(error)
         testcase.needed_restart = complications
         testcase.exit_code = exit_code
