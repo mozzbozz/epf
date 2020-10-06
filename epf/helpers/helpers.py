@@ -1,3 +1,4 @@
+import sys
 from functools import reduce
 from itertools import groupby
 import ctypes
@@ -447,4 +448,7 @@ def get_all_subclasses(cls):
 
 
 def get_random_string(length: int, chars: [] = string.ascii_uppercase + string.ascii_lowercase) -> str:
-    return ''.join(random.choice([x for x in chars]) for _ in range(0, length))
+    s = ''.join(random.choice([x for x in chars]) for _ in range(0, length))
+    if constants.TRACE:
+        print(f"rng_trace, get_random_string, 1, {s}", file=sys.stderr)
+    return s

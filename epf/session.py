@@ -1,6 +1,8 @@
 import csv
 import json
 import os
+import sys
+import threading
 import time
 from numpy import random
 
@@ -10,7 +12,7 @@ from . import helpers
 from . import shm
 from . import constants
 from epf.graph import Graph
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from .testcase import TestCase
 from epf.prompt.session_prompt import SessionPrompt
@@ -81,6 +83,9 @@ class Session(object):
                  time_budget: float = 0.0,
                  post_relax: bool = True,
                  debug: bool = False,
+                 output: str = "",
+                 dump_shm: bool = False,
+                 deterministic: bool = False,
                  ):
         super().__init__()
 
@@ -98,9 +103,11 @@ class Session(object):
             population_limit=population_limit,
             time_budget=time_budget,
             post_relax=post_relax,
-            debug=debug
+            debug=debug,
+            output=output,
+            dump_shm=dump_shm,
+            deterministic=deterministic,
         )
-
 
         self.fuzz_protocol = fuzz_protocol
 
@@ -116,6 +123,8 @@ class Session(object):
         self.suspects = []
 
         self.restarter = restarter
+        self.restarter.restart(planned=True)
+        # self.restarter.suspend() TODO
 
         # Some variables that will be used during fuzzing
         self.time_budget = SessionClock(time_budget)
@@ -127,7 +136,7 @@ class Session(object):
         self.active_individual = None
         self.active_testcase = None
         self.previous_testcase = None
-        self.drain_seed_individuals = False
+        self.drain_seed_individuals = True
 
         self.is_paused = False
         self.prompt = None
@@ -138,6 +147,8 @@ class Session(object):
 
         # Create Results Dir if it does not exist
         self.result_dir = os.path.join('epf-results', f'{int(time.time())}')
+        if self.opts.output != "":
+            self.result_dir = self.opts.output
         self.transition_payload_dir = os.path.join(self.result_dir, 'transition_payloads')
         self.bug_payload_dir = os.path.join(self.result_dir, 'bug_payloads')
         helpers.mkdir_safe(self.result_dir)
@@ -155,15 +166,26 @@ class Session(object):
         if self.opts.debug:
             self.prepare_debug_csv()
         self.update_bug_db = False
+        self.t_last_increase = time.time()
+        self.test_case_buffer = []
 
     def write_run_json(self):
         json_file = os.path.join(self.result_dir, "run.json")
         mem = shm.get()
+        mem.acquire()
+
         data = {
             "general": {
                 "fuzzer": self.fuzz_protocol.name,
                 "time_budget": self.time_budget.budget,
                 "random_seed": self.opts.seed,
+                "output": self.result_dir,
+                "debug": self.opts.debug,
+                "dump_shm": self.opts.dump_shm,
+                "deterministic": self.opts.deterministic,
+                "dtrace": constants.TRACE,
+                "batch": constants.BATCH,
+                "shm_overwrite": constants.SHM_OVERWRITE,
             },
             "target": {
                 "exec_command": self.restarter.cmd,
@@ -192,6 +214,7 @@ class Session(object):
                 },
             },
         }
+        mem.release()
         with open(json_file, 'w') as f:
             json.dump(data, f, indent=2)
 
@@ -253,8 +276,28 @@ class Session(object):
         """
         Starts the prompt once the session is prepared
         """
-        self.prompt = SessionPrompt(self)
-        self.prompt.start_prompt()
+        if not constants.BATCH:
+            self.prompt = SessionPrompt(self)
+            self.prompt.start_prompt()
+        else:
+            self.is_paused = False
+            t = threading.Thread(target=self.run_all)
+            t.start()
+            t.join()
+            self.restarter.kill()
+            self.bugs_csv.flush()
+            self.bugs_csv.close()
+            if self.opts.debug:
+                self.debug_csv.flush()
+                self.debug_csv.close()
+            if self.opts.dump_shm:
+                sp = os.path.join(self.result_dir, 'shm.bin')
+                with open(sp, 'wb') as dst:
+                    mem = shm.get()
+                    mem.acquire()
+                    dst.write(mem.buf)
+                    mem.release()
+                    mem.close()
 
     # --------------------------------------------------------------- #
 
@@ -268,6 +311,8 @@ class Session(object):
                 key = next(self.population_iterator)
             self.active_population = self.populations[key]
             self.energy = 1.0
+            if self.energy_periods > 0:
+                self.active_population.reseed(self.opts.population_limit)
         self.cooldown()
 
     def generate_individual(self):
@@ -278,21 +323,61 @@ class Session(object):
         self.test_case_cnt += 1
         self.previous_testcase = self.active_testcase
         self.active_testcase = TestCase(id=self.test_case_cnt, session=self, individual=self.active_individual)
-        self.active_testcase.run()
+        self.test_case_buffer += [self.active_testcase]
+        if len(self.test_case_buffer) > 10:
+            self.test_case_buffer.pop(0)
+        if not self.restarter.healthy():
+            self.inspect_test_case_buffer()
+        err, executed = self.active_testcase.run()
+        return err, executed
 
-    def update_population(self):
-        increase = self.active_testcase.coverage_increase
-        if self.active_testcase.coverage_increase:
+    def inspect_test_case_buffer(self):
+        target_ret_val = self.restarter.kill(ignore=True)
+        self.restarter.restart(planned=False)
+        ln = len(self.test_case_buffer)
+        found = False
+        for tcs in self.test_case_buffer:
+            err, executed = tcs.run()
+            time.sleep(1.0)
+            if not self.restarter.healthy():
+                tcs.needed_restart = True
+                tcs.exit_code = target_ret_val
+                self.restarter.crashes += 1
+                self.restarter.restarts += 1
+                self.add_suspect(tcs, err, True, target_ret_val)
+                self.restarter.restart(planned=False)
+                found = True
+                break
+            self.restarter.restart(planned=False)
+        if not found:
+            for tcs in self.test_case_buffer:
+                self.add_suspect(tcs, Exception("uncertain"), True, 0)
+        self.test_case_buffer = []
+
+    def update_population(self, err, executed) -> bool:
+        crashed = not self.restarter.healthy()
+        if (crashed or not executed) and not isinstance(err, exception.EPFPaused):
+            self.inspect_test_case_buffer()
+        elif crashed:
+            self.restarter.restart()
+        cov = self.active_testcase.coverage_snapshot
+        change = cov != self.previous_testcase.coverage_snapshot if self.previous_testcase is not None else True
+        if constants.TRACE:
+            print(f"cov_trace, {self.test_case_cnt}, {cov}, {change}", file=sys.stderr)
+        if change:
+            self.t_last_increase = time.time()
+            self.active_testcase.coverage_increase = True
             self.reheat()
-            self.active_population.update(self.active_individual, heat=self.energy, add=increase)
-        self.active_population.update(self.active_individual, heat=self.energy, add=random.random() <= self.energy)
+            self.active_population.update(self.active_individual, heat=self.energy, add=change)
+        else:
+            self.active_population.update(self.active_individual, heat=self.energy, add=random.random() <= self.energy)
         self.active_population.shrink(self.opts.population_limit)
+        return True
 
     def update_bugs(self):
         if not self.update_bug_db:
             return
         suspect: TestCase = self.suspects[-1]
-        mem = shm.get()
         row = {
             "bug_id": len(self.suspects),
             "timestamp": round(self.time_budget.execution_time, 2),
@@ -303,7 +388,7 @@ class Session(object):
             "caused_restart": suspect.needed_restart,
             "cause_of_restart": str(suspect.errors[-1]),
             "exit_code": suspect.exit_code,
-            "reported_coverage": mem.directed_branch_coverage()[0],
+            "reported_coverage": suspect.coverage_snapshot,
             "population": suspect.individual.species,
             "population_size": len(self.populations[suspect.individual.species]),
             "energy": self.energy,
@@ -320,7 +405,6 @@ class Session(object):
         if not self.opts.debug:
             return
         tc: TestCase = self.active_testcase
-        mem = shm.get()
         row = {
             "timestamp": round(self.time_budget.execution_time, 2),
             "iteration": self.test_case_cnt,
@@ -330,12 +414,15 @@ class Session(object):
             "caused_restart": tc.needed_restart,
             "cause_of_restart": str(tc.errors[-1]) if len(tc.errors) != 0 else "-",
             "exit_code": tc.exit_code if len(tc.errors) != 0 else 0,
-            "reported_coverage": mem.directed_branch_coverage()[0],
+            "reported_coverage": tc.coverage_snapshot,
             "population": tc.individual.species,
             "population_size": len(self.populations[tc.individual.species]),
             "energy": self.energy,
             "energy_period": self.energy_periods
         }
+        # with open(os.path.join(self.bug_payload_dir, tc.individual.species, str(tc.individual.identity)), "wb") as f:
+        #     f.write(tc.individual.serialize())
+        #     f.flush()
         self.debug_csv_writer.writerow(row)
         self.debug_csv.flush()
 
@@ -356,6 +443,8 @@ class Session(object):
         if self.time_budget.exhausted:
             self.is_paused = True
         result = not (self.time_budget.exhausted or self.is_paused)
+        if int(self.time_budget.execution_time) % 10 == 0 and constants.BATCH:
+            print(f"{self.time_budget.execution_time}/{self.time_budget.budget}")
         if result:
             self.time_budget.start()
         return result
@@ -373,41 +462,38 @@ class Session(object):
                 self.active_population = self.populations[key]
                 self.drain_seed_iterator = iter(self.active_population)
                 continue
-            _ = self.active_testcase.coverage_increase
             self.evaluate_individual()
+            self.restarter.kill(ignore=True)
+            self.restarter.restart(planned=True)
             self.update_bugs()
             self.debug()
 
     def run_all(self):
         if self.drain_seed_individuals:
             self.drain()
-        while self.cont():                  # while CONTINUE(C) do X
-            self.schedule_population()      #   conf <- SCHEDULE(C, t_elapsed, t_limit) <--- X
-            self.generate_individual()      #   tcs  <- INPUTGEN(conf) <----- NEXT
-            self.evaluate_individual()      #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
-            self.update_population()        #   C <- CONFUPDATE(C', conf, execinfos)
-            self.update_bugs()              #   B <- B u B'
+        #########
+        while self.cont():                                      # while CONTINUE(C)
+            self.schedule_population()                          #   conf <- SCHEDULE(C, t_elapsed, t_limit)
+            self.generate_individual()                          #   tcs  <- INPUTGEN(conf)
+            err, executed = self.evaluate_individual()
+            self.update_population(err, executed)
+            self.update_bugs()
+
+
+
+
+            #retry = False
+            #while True:
+            #    # retry
+            #    failed = self.evaluate_individual(retry=retry)  #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
+            #    retry = not self.update_population(failed)      #   C <- CONFUPDATE(C', conf, execinfos)
+            #    if not retry:
+            #        break
+            #    if constants.TRACE:
+            #        print(f"retry, {self.test_case_cnt}", file=sys.stderr)
+            #self.update_bugs()                                  #   B <- B u B'
+            ##################
             self.debug()
-
-    # ================================================================#
-    # Graph related functions                                         #
-    # =====================================================   ===========#
-
-    def connect(self, src: Any, dst: Any = None, callback: callable = None):
-        """
-        Connects a request to the session as a root node, or two request between them. Optionally specifying a callback
-        in between requests.
-        It updates the number of total mutations
-
-        Args:
-            src: First request to connect
-            dst: Second Request to connect, if None it will connect the src Request as a root node in the session graph
-            callback: Optional, specify a callback that will be run in between requests and can change the data
-        """
-        try:
-            self.graph.connect(src, dst, callback)
-        except exception.EPFRuntimeError:
-            pass
 
     # ================================================================#
     # Suspects, disabled elements                                     #
@@ -415,15 +501,14 @@ class Session(object):
 
     def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         self.add_suspect(self.active_testcase, error, complications, exit_code)
-        self.update_bug_db = True
 
     def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
         if self.previous_testcase is None:
             return
         self.add_suspect(self.previous_testcase, error, complications, exit_code)
-        self.update_bug_db = True
 
     def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
+        self.update_bug_db = True
         testcase.add_error(error)
         testcase.needed_restart = complications
         testcase.exit_code = exit_code

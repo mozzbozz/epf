@@ -134,6 +134,7 @@ class SocketConnection(ITargetConnection):
 
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, _seconds_to_second_microsecond_struct(self._send_timeout))
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, _seconds_to_second_microsecond_struct(self._recv_timeout))
+        # self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _seconds_to_second_microsecond_struct(self._recv_timeout))
 
         # Connect is needed only for TCP protocols
         if self.proto == "tcp" or self.proto == "ssl":

@@ -2,12 +2,13 @@ prompt-toolkit>=3.0.0,<4.0.0
 attrs~=19.3.0
 pygments~=2.6.1
 pydot
+sysv_ipc
+posix_ipc
 
 networkx~=2.4
 scapy~=2.4.3
 matplotlib~=3.2.2
 npyscreen~=4.10.5
-epf~=1.0.4
 hexdump~=3.3
 numpy~=1.19.0
 psutil~=5.7.0
