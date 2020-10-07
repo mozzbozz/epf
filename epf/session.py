@@ -327,39 +327,15 @@ class Session(object):
         if len(self.test_case_buffer) > 10:
             self.test_case_buffer.pop(0)
         if not self.restarter.healthy():
-            self.inspect_test_case_buffer()
+            self.update_bugs(Exception("uncertain"))
         err, executed = self.active_testcase.run()
         return err, executed
 
-    def inspect_test_case_buffer(self):
-        target_ret_val = self.restarter.kill(ignore=True)
-        self.restarter.restart(planned=False)
-        ln = len(self.test_case_buffer)
-        found = False
-        for tcs in self.test_case_buffer:
-            err, executed = tcs.run()
-            time.sleep(1.0)
-            if not self.restarter.healthy():
-                tcs.needed_restart = True
-                tcs.exit_code = target_ret_val
-                self.restarter.crashes += 1
-                self.restarter.restarts += 1
-                self.add_suspect(tcs, err, True, target_ret_val)
-                self.restarter.restart(planned=False)
-                found = True
-                break
-            self.restarter.restart(planned=False)
-        if not found:
-            for tcs in self.test_case_buffer:
-                self.add_suspect(tcs, Exception("uncertain"), True, 0)
-        self.test_case_buffer = []
 
     def update_population(self, err, executed) -> bool:
         crashed = not self.restarter.healthy()
         if (crashed or not executed) and not isinstance(err, exception.EPFPaused):
-            self.inspect_test_case_buffer()
-        elif crashed:
-            self.restarter.restart()
+            self.update_bugs(err)
         cov = self.active_testcase.coverage_snapshot
         change = cov != self.previous_testcase.coverage_snapshot if self.previous_testcase is not None else True
         if constants.TRACE:
@@ -374,32 +350,36 @@ class Session(object):
         self.active_population.shrink(self.opts.population_limit)
         return True
 
-    def update_bugs(self):
-        if not self.update_bug_db:
-            return
-        suspect: TestCase = self.suspects[-1]
-        row = {
-            "bug_id": len(self.suspects),
-            "timestamp": round(self.time_budget.execution_time, 2),
-            "iteration": self.test_case_cnt,
-            "test_id": suspect.name,
-            "individual": suspect.individual.identity,
-            "increased_coverage": suspect.coverage_increase,
-            "caused_restart": suspect.needed_restart,
-            "cause_of_restart": str(suspect.errors[-1]),
-            "exit_code": suspect.exit_code,
-            "reported_coverage": suspect.coverage_snapshot,
-            "population": suspect.individual.species,
-            "population_size": len(self.populations[suspect.individual.species]),
-            "energy": self.energy,
-            "energy_period": self.energy_periods
-        }
-        self.bugs_csv_writer.writerow(row)
-        self.bugs_csv.flush()
-        with open(os.path.join(self.bug_payload_dir, suspect.individual.species, str(suspect.individual.identity)), "wb") as f:
-            f.write(suspect.individual.serialize())
-            f.flush()
-        self.update_bug_db = False
+    def update_bugs(self, err: Exception):
+        retval = self.restarter.kill()
+        self.restarter.restart()
+        for tcs in self.test_case_buffer:
+            tcs.add_error(err)
+            tcs.needed_restart = True
+            tcs.exit_code = int(retval)
+            self.suspects += [tcs]
+            row = {
+                "bug_id": len(self.suspects),
+                "timestamp": round(self.time_budget.execution_time, 2),
+                "iteration": self.test_case_cnt,
+                "test_id": tcs.name,
+                "individual": tcs.individual.identity,
+                "increased_coverage": tcs.coverage_increase,
+                "caused_restart": tcs.needed_restart,
+                "cause_of_restart": str(tcs.errors[-1]),
+                "exit_code": tcs.exit_code,
+                "reported_coverage": tcs.coverage_snapshot,
+                "population": tcs.individual.species,
+                "population_size": len(self.populations[tcs.individual.species]),
+                "energy": self.energy,
+                "energy_period": self.energy_periods
+            }
+            self.bugs_csv_writer.writerow(row)
+            self.bugs_csv.flush()
+            with open(os.path.join(self.bug_payload_dir, tcs.individual.species, str(tcs.individual.identity)), "wb") as f:
+                f.write(tcs.individual.serialize())
+                f.flush()
+        self.test_case_buffer = []
 
     def debug(self):
         if not self.opts.debug:
@@ -465,7 +445,6 @@ class Session(object):
             self.evaluate_individual()
             self.restarter.kill(ignore=True)
             self.restarter.restart(planned=True)
-            self.update_bugs()
             self.debug()
 
     def run_all(self):
@@ -477,13 +456,8 @@ class Session(object):
             self.generate_individual()                          #   tcs  <- INPUTGEN(conf)
             err, executed = self.evaluate_individual()
             self.update_population(err, executed)
-            self.update_bugs()
-
-
-
-
-            #retry = False
-            #while True:
+            # retry = False
+            # while True:
             #    # retry
             #    failed = self.evaluate_individual(retry=retry)  #   B', execinfos <- INPUTEVAL(conf, tcs, O_bug)
             #    retry = not self.update_population(failed)      #   C <- CONFUPDATE(C', conf, execinfos)
@@ -491,7 +465,7 @@ class Session(object):
             #        break
             #    if constants.TRACE:
             #        print(f"retry, {self.test_case_cnt}", file=sys.stderr)
-            #self.update_bugs()                                  #   B <- B u B'
+            # self.update_bugs()                                  #   B <- B u B'
             ##################
             self.debug()
 
@@ -499,20 +473,20 @@ class Session(object):
     # Suspects, disabled elements                                     #
     # ================================================================#
 
-    def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
-        self.add_suspect(self.active_testcase, error, complications, exit_code)
+    # def add_current_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
+    #     self.add_suspect(self.active_testcase, error, complications, exit_code)
 
-    def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
-        if self.previous_testcase is None:
-            return
-        self.add_suspect(self.previous_testcase, error, complications, exit_code)
+    # def add_last_case_as_suspect(self, error: Exception, complications: bool, exit_code: int):
+    #     if self.previous_testcase is None:
+    #         return
+    #     self.add_suspect(self.previous_testcase, error, complications, exit_code)
 
-    def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
-        self.update_bug_db = True
-        testcase.add_error(error)
-        testcase.needed_restart = complications
-        testcase.exit_code = exit_code
-        self.suspects += [testcase]
+    # def add_suspect(self, testcase: TestCase, error: Exception, complications: bool, exit_code: int):
+    #     self.update_bug_db = True
+    #     testcase.add_error(error)
+    #     testcase.needed_restart = complications
+    #     testcase.exit_code = exit_code
+    #     self.suspects += [testcase]
 
     def add_target(self, target: Target):
         """

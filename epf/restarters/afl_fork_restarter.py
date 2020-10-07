@@ -146,30 +146,30 @@ class AFLForkRestarter(IRestarter):
     #     self.retval = None
     #     return ret
 
-
     def kill(self, ignore=False):
-        retval = -1
         if self.process is None:
-            return retval
+            return -1
         try:
-            if self.healthy():
-                self._wait_for_status(status=psutil.STATUS_SLEEPING)
+            self._wait_for_status(status=psutil.STATUS_SLEEPING)
             retval = -1
-            try:
-                self.process.terminate()
-            except Exception:
-                pass
-            #self.process.kill()
-            retval = self.process.wait()
-            # psutil.wait_procs([self.process], callback=self.cb)
-            # while self.wait:
-            #     print("waiting")
-            #     time.sleep(0.1)
-            # retval = int(self.process.returncode)
+            children = self.process.children()
+            for child in children:
+                child.terminate()
+            _, alive = psutil.wait_procs(children, timeout=1.0)
+            for bad_boy in alive:
+                bad_boy.kill()
+            if self.process.status() == psutil.STATUS_STOPPED:
+                self.resume()
+            self.process.terminate()
+            _, alive = psutil.wait_procs([self.process], timeout=1.0)
+            if len(alive) > 0:
+                self.process.kill()
+                psutil.wait_procs([self.process], timeout=1.0)
             if not ignore:
+                retval = self.process.returncode
                 self.crashes += 1
         except Exception:
-            pass
+            retval = 0
         self.process = None
         return retval
 
