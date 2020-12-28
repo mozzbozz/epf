@@ -57,7 +57,7 @@ class EPF(object):
             debug=self.args.debug,
             output=self.args.output,
             dump_shm=self.args.dump_shm,
-            deterministic=self.args.deterministic,
+            deterministic=False  # broken
         )
 
     # --------------------------------------------------------------- #
@@ -100,7 +100,7 @@ class EPF(object):
         fuzz_grp.add_argument('--output', dest='output', type=str, default="", help='output dir')
         fuzz_grp.add_argument('--shm_id', dest='shm_id', type=str, default="", help='custom shared memory id overwrite')
         fuzz_grp.add_argument('--dump_shm', dest='dump_shm', action='store_true', default=False, help='dump shm after run')
-        fuzz_grp.add_argument('--deterministic', dest='deterministic', action='store_true', default=False, help='SLOW mode, ~2x less iterations, but fairly deterministic runs (verify by comparing two --dtrace runs)')
+        #fuzz_grp.add_argument('--deterministic', dest='deterministic', action='store_true', default=False, help='SLOW mode, ~2x less iterations, but fairly deterministic runs (verify by comparing two --dtrace runs)')
 
         restarters_grp = self.parser.add_argument_group('Restart options')
         restarters_help = 'Restarter Modules:\n'
