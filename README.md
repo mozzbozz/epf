@@ -158,7 +158,7 @@ for the domain of power grid communication protocols, but is not limited to it.
 **System:**
 
 ```bash
-sudo apt-get update && sudo apt get install python3 python3-pip python3-venv
+sudo apt-get update && sudo apt-get install python3 python3-pip python3-venv
 ```
 
 *Additionally:* [AFL++](https://github.com/AFLplusplus/AFLplusplus) for compile-time instrumentation.
